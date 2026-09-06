@@ -38,7 +38,8 @@ COLLAPSIBLE = "Collapsible - Lots Across"        # fields as rows, lots as colum
 COLLAPSIBLE_ROWS = "Collapsible - Lots Down"     # lots as rows, fields as columns
 LEDGER = "Ledger Filter - Lots Down"             # lots as rows, fields as columns
 LEDGER_COLS = "Ledger Filter - Lots Across"      # fields as rows, lots as columns
-ALL_VIEWS = (COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
+LOT_VERTICAL = "Lot-wise Vertical"               # buyer > lot > fields, all downwards
+ALL_VIEWS = (LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
@@ -996,6 +997,184 @@ def build_ledger_cols(wb, buyers):
 
 
 
+# --------------------------------------------------------------------------- #
+# sheet 5 - buyer > lot > fields, everything running downwards
+# --------------------------------------------------------------------------- #
+def build_lot_vertical(wb, buyers):
+    """Three fold levels: buyer, then lot, then the fields of that lot."""
+    ws = wb.create_sheet(LOT_VERTICAL, 1)
+    ws.sheet_properties.tabColor = "00B050"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    ws.sheet_properties.outlinePr.summaryRight = True
+    ws.sheet_format.outlineLevelRow = 3
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 46
+    ws.column_dimensions["B"].width = 30
+
+    ws.merge_cells("A1:B1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  BUYER \u25b8 LOT \u25b8 FIELD  \u2014  VERTICAL DETAIL "
+               "(everything reads downwards)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells("A2:B2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  the \u2212 / + buttons in the left margin fold three levels: "
+               "1 = buyer names only, 2 = buyer + their lot numbers, 3 = buyer + lot + section "
+               "headings, 4 = every field of every lot   \u2022   each lot is its own block with the "
+               "fields listed one below the other   \u2022   every buyer ends with its own "
+               "\u2211 TOTALS block, and the sheet ends with an all-buyers grand total   "
+               "\u2022   every figure is a live link to 'Final Calculation Sheet'")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 44
+    ws.row_dimensions[3].height = 6
+
+    hdr = 4
+    for col, text, width in ((1, "FIELD  \u25b8  BUYER  /  LOT  /  DETAIL", None), (2, "VALUE", None)):
+        cc = ws.cell(row=hdr, column=col, value=text)
+        cc.font = Font(bold=True, size=10, color="FFFFFF")
+        cc.fill = fill("404040")
+        cc.alignment = CENTER if col == 2 else Alignment(horizontal="left", vertical="center", indent=1)
+        cc.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 24
+    ws.freeze_panes = f"A{hdr + 1}"
+
+    r = hdr + 1
+    total_rows = {}          # field label -> [row of each buyer totals block]
+    for bi, (buyer, rows) in enumerate(buyers.items()):
+        accent, tint, pale = THEMES[bi % len(THEMES)]
+
+        # buyer banner ------------------------------------------------------ #
+        c = ws.cell(row=r, column=1)
+        c.value = (f'="\u25bc  {buyer}   \u2022   "&COUNTIF({criteria(buyer)})&" LOT(S)   \u2022   '
+                   f'MAT. VALUE \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$H${FIRST_DATA_ROW}:$H${LAST_SRC_ROW}),"#,##0")'
+                   f'&"   \u2022   RECEIVED \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$AC${FIRST_DATA_ROW}:$AC${LAST_SRC_ROW}),"#,##0")'
+                   f'&"   \u2022   OUTSTANDING \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$AD${FIRST_DATA_ROW}:$AD${LAST_SRC_ROW}),"#,##0")')
+        c.font = Font(bold=True, size=12, color="FFFFFF")
+        c.fill = fill(accent)
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        for col in (1, 2):
+            ws.cell(row=r, column=col).fill = fill(accent)
+            ws.cell(row=r, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+        ws.row_dimensions[r].height = 24
+        r += 1
+
+        # one block per lot -------------------------------------------------- #
+        for srow in rows:
+            lot = wb[SRC][f"F{srow}"].value
+            c = ws.cell(row=r, column=1)
+            c.value = (f'="   \u25b8  LOT "&\'{SRC}\'!$F${srow}&"   \u2022   "&\'{SRC}\'!$B${srow}&'
+                       f'"   \u2022   MAT. VALUE \u20b9"&TEXT(\'{SRC}\'!$H${srow},"#,##0")&'
+                       f'"   \u2022   OUTSTANDING \u20b9"&TEXT(\'{SRC}\'!$AD${srow},"#,##0")')
+            c.font = Font(bold=True, size=11, color=accent)
+            for col in (1, 2):
+                ws.cell(row=r, column=col).fill = fill(tint)
+                ws.cell(row=r, column=col).border = BOX
+            c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            ws.row_dimensions[r].outlineLevel = 1
+            ws.row_dimensions[r].height = 20
+            r += 1
+
+            for sname, fields in SECTIONS:
+                c = ws.cell(row=r, column=1, value=f"      \u25b8 {sname}")
+                c.font = Font(bold=True, size=10, color=accent)
+                c.alignment = LEFT
+                for col in (1, 2):
+                    ws.cell(row=r, column=col).fill = fill(pale)
+                    ws.cell(row=r, column=col).border = BOX
+                ws.row_dimensions[r].outlineLevel = 2
+                ws.row_dimensions[r].height = 16
+                r += 1
+
+                for label, scol, kind, _agg in fields:
+                    a = ws.cell(row=r, column=1, value=f"            {label}")
+                    a.font = Font(size=10, color="333333")
+                    a.alignment = LEFT
+                    b = ws.cell(row=r, column=2)
+                    b.value = status_formula(srow) if scol is None else src(scol, srow)
+                    b.number_format = KIND_FMT[kind]
+                    b.font = Font(size=10, bold=(scol is None))
+                    b.alignment = LEFT if kind == "text" else RIGHT
+                    for col in (1, 2):
+                        ws.cell(row=r, column=col).border = BOX
+                    ws.row_dimensions[r].outlineLevel = 3
+                    ws.row_dimensions[r].height = 15
+                    r += 1
+
+        # buyer totals block -------------------------------------------------- #
+        c = ws.cell(row=r, column=1, value=f"   \u2211  {buyer} \u2014 TOTALS (all its lots)")
+        c.font = Font(bold=True, size=11, color="FFFFFF")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        for col in (1, 2):
+            ws.cell(row=r, column=col).fill = fill(accent)
+            ws.cell(row=r, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+        ws.row_dimensions[r].outlineLevel = 1
+        ws.row_dimensions[r].height = 20
+        r += 1
+        for _sname, fields in SECTIONS:
+            for label, scol, kind, agg in fields:
+                if agg != "sum":
+                    continue
+                a = ws.cell(row=r, column=1, value=f"         {label}")
+                a.font = Font(size=10, color="333333")
+                a.alignment = LEFT
+                b = ws.cell(row=r, column=2,
+                            value=f"=SUMIF({criteria(buyer)},"
+                                  f"'{SRC}'!${scol}${FIRST_DATA_ROW}:${scol}${LAST_SRC_ROW})")
+                b.number_format = KIND_FMT[kind]
+                b.font = Font(bold=True, size=10, color=accent)
+                b.alignment = RIGHT
+                for col in (1, 2):
+                    ws.cell(row=r, column=col).fill = fill(tint)
+                    ws.cell(row=r, column=col).border = BOX
+                ws.row_dimensions[r].outlineLevel = 2
+                ws.row_dimensions[r].height = 15
+                total_rows.setdefault(label, []).append(r)
+                r += 1
+
+        for col in (1, 2):
+            ws.cell(row=r, column=col).fill = fill("EDEDED")
+        ws.row_dimensions[r].height = 7
+        r += 1
+
+    # grand total block ------------------------------------------------------- #
+    c = ws.cell(row=r, column=1, value="\u2211\u2211  ALL BUYERS \u2014 GRAND TOTAL")
+    c.font = Font(bold=True, size=12, color="FFFFFF")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for col in (1, 2):
+        ws.cell(row=r, column=col).fill = fill("1F3864")
+        ws.cell(row=r, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[r].height = 24
+    r += 1
+    for label, refs in total_rows.items():
+        kind = next(k for _n, f in SECTIONS for (l, _s, k, a) in f if l == label)
+        a = ws.cell(row=r, column=1, value=f"      {label}")
+        a.font = Font(size=10, color="333333")
+        a.alignment = LEFT
+        b = ws.cell(row=r, column=2, value="=" + "+".join(f"B{x}" for x in refs))
+        b.number_format = KIND_FMT[kind]
+        b.font = Font(bold=True, size=10, color="1F3864")
+        b.alignment = RIGHT
+        for col in (1, 2):
+            ws.cell(row=r, column=col).fill = fill("DDEBF7")
+            ws.cell(row=r, column=col).border = BOX
+        ws.row_dimensions[r].outlineLevel = 1
+        ws.row_dimensions[r].height = 15
+        r += 1
+
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -1004,11 +1183,12 @@ def main(path: str) -> None:
         if name in wb.sheetnames:
             del wb[name]
     buyers = read_lots(wb[SRC])
+    build_lot_vertical(wb, buyers)
     build_collapsible(wb, buyers)
     build_collapsible_rows(wb, buyers)
     build_ledger(wb, buyers)
     build_ledger_cols(wb, buyers)
-    wb.active = wb.sheetnames.index(COLLAPSIBLE_ROWS)
+    wb.active = wb.sheetnames.index(LOT_VERTICAL)
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.

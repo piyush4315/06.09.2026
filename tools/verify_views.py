@@ -17,7 +17,8 @@ import openpyxl
 
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER,  # noqa: E402
-                                   LEDGER_COLS, SECTIONS, SRC, plan_fields, read_lots)
+                                   LEDGER_COLS, LOT_VERTICAL, SECTIONS, SRC, plan_fields,
+                                   read_lots)
 
 import formulas  # noqa: E402
 
@@ -309,6 +310,81 @@ def main(path):
                sum(num(truth(scol, x)) for rs in buyers.values() for x in rs))
         else:
             eq(f"{LEDGER_COLS} TOTAL dash {label}", V(LEDGER_COLS, f"{total_letter}{r}"), "\u2013")
+
+
+    # ================= LOT-WISE VERTICAL ================================== #
+    ws = wb[LOT_VERTICAL]
+    blocks5 = OrderedDict()
+    grand5 = {}
+    cur_b = cur_lot = None
+    mode = None
+    for r in range(5, ws.max_row + 1):
+        a = ws[f"A{r}"].value
+        lvl = ws.row_dimensions[r].outline_level if r in ws.row_dimensions else 0
+        if isinstance(a, str) and a.startswith('="\u25bc'):
+            cur_b = re.search(r'\u25bc  (.+?)   \u2022', a).group(1)
+            blocks5[cur_b] = {"lots": [], "totals": {}}
+            mode = "buyer"
+        elif isinstance(a, str) and a.startswith('="   \u25b8'):
+            srow = int(re.search(r"\$F\$(\d+)", a).group(1))
+            cur_lot = {}
+            blocks5[cur_b]["lots"].append((srow, cur_lot))
+            mode = "lot"
+        elif isinstance(a, str) and a.startswith("   \u2211"):
+            mode = "totals"
+        elif isinstance(a, str) and a.startswith("\u2211\u2211"):
+            mode = "grand"
+        elif isinstance(a, str) and a.startswith("      \u25b8"):
+            pass                                        # section heading
+        elif lvl == 3 and cur_lot is not None:
+            cur_lot[a.strip()] = r
+        elif lvl == 2 and mode == "totals":
+            blocks5[cur_b]["totals"][a.strip()] = r
+        elif lvl == 1 and mode == "grand":
+            grand5[a.strip()] = r
+    print(f"lot-wise vertical: {len(blocks5)} buyers, "
+          f"{sum(len(b['lots']) for b in blocks5.values())} lot blocks, "
+          f"{len(grand5)} grand total lines")
+    assert len(blocks5) == len(buyers)
+    for buyer, rows in buyers.items():
+        b = blocks5[buyer]
+        checks += 1
+        if [x[0] for x in b["lots"]] != rows:
+            fails.append(f"{LOT_VERTICAL}: {buyer} lots {[x[0] for x in b['lots']]} != {rows}")
+        for srow, fields in b["lots"]:
+            checks += 1
+            if len(fields) != len(plan):
+                fails.append(f"{LOT_VERTICAL}: lot {srow} has {len(fields)} field rows, expected {len(plan)}")
+            for label, scol, _kind, _a in plan:
+                rr = fields.get(label)
+                if rr is None:
+                    fails.append(f"{LOT_VERTICAL}: lot {srow} missing row '{label}'")
+                    continue
+                if label == "Payment Status":
+                    o = num(truth("AD", srow), None)
+                    want = "" if o is None else ("SETTLED" if o <= 0 else "OUTSTANDING")
+                else:
+                    t = truth(scol, srow)
+                    want = "" if t is None else t
+                eq(f"{LOT_VERTICAL}!B{rr} [lot {srow}/{label}]", V(LOT_VERTICAL, f"B{rr}"), want)
+        for label, scol, _kind, agg in plan:
+            if agg != "sum":
+                continue
+            rr = b["totals"].get(label)
+            if rr is None:
+                fails.append(f"{LOT_VERTICAL}: {buyer} totals block missing '{label}'")
+                continue
+            eq(f"{LOT_VERTICAL} {buyer} totals {label}", V(LOT_VERTICAL, f"B{rr}"),
+               sum(num(truth(scol, x)) for x in rows))
+    for label, scol, _kind, agg in plan:
+        if agg != "sum":
+            continue
+        rr = grand5.get(label)
+        if rr is None:
+            fails.append(f"{LOT_VERTICAL}: grand total missing '{label}'")
+            continue
+        eq(f"{LOT_VERTICAL} GRAND TOTAL {label}", V(LOT_VERTICAL, f"B{rr}"),
+           sum(num(truth(scol, x)) for rs in buyers.values() for x in rs))
 
     print(f"\nchecks run: {checks}")
     if fails:
