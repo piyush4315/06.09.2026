@@ -16,8 +16,8 @@ from collections import OrderedDict
 import openpyxl
 
 sys.path.insert(0, "tools")
-from build_buyer_lot_views import (COLLAPSIBLE, LEDGER, SECTIONS, SRC,  # noqa: E402
-                                   read_lots)
+from build_buyer_lot_views import (COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER,  # noqa: E402
+                                   LEDGER_COLS, SECTIONS, SRC, plan_fields, read_lots)
 
 import formulas  # noqa: E402
 
@@ -231,6 +231,84 @@ def main(path):
     for cell, col in (("C", "H"), ("D", "S"), ("E", "AC"), ("F", "AD")):
         eq(f"index ALL BUYERS {cell}", V(COLLAPSIBLE, f"{cell}{tr}"),
            sum(num(truth(col, r)) for rs in buyers.values() for r in rs))
+
+
+    # ================= COLLAPSIBLE - LOTS DOWN ============================ #
+    plan = plan_fields()
+    ws = wb[COLLAPSIBLE_ROWS]
+    letters2 = {str(c.value): c.column_letter for c in ws[4] if c.value}
+    blocks2 = OrderedDict()
+    cur = None
+    for r in range(5, ws.max_row + 1):
+        a = ws[f"A{r}"].value
+        lvl = ws.row_dimensions[r].outline_level if r in ws.row_dimensions else 0
+        if isinstance(a, str) and a.startswith('="\u25bc'):
+            cur = re.search(r'\u25bc  (.+?)   \u2022', a).group(1)
+            blocks2[cur] = {"banner": r, "lots": [], "totals": None}
+        elif isinstance(a, str) and a.startswith("\u2211") and cur:
+            blocks2[cur]["totals"] = r
+        elif lvl == 1 and cur and isinstance(a, str):
+            blocks2[cur]["lots"].append((r, int(re.search(r"\$[A-Z]{1,2}\$(\d+)", a).group(1))))
+    print(f"collapsible (lots down): {len(blocks2)} blocks, "
+          f"{sum(len(b['lots']) for b in blocks2.values())} lot rows")
+    assert len(blocks2) == len(buyers)
+    for buyer, rows in buyers.items():
+        b = blocks2[buyer]
+        checks += 1
+        if [x[1] for x in b["lots"]] != rows:
+            fails.append(f"{COLLAPSIBLE_ROWS}: {buyer} lots {b['lots']} != source rows {rows}")
+        for r, srow in b["lots"]:
+            for label, scol, _kind, _a in plan:
+                letter = letters2[label]
+                if label == "Payment Status":
+                    o = num(truth("AD", srow), None)
+                    want = "" if o is None else ("SETTLED" if o <= 0 else "OUTSTANDING")
+                else:
+                    t = truth(scol, srow)
+                    want = "" if t is None else t
+                eq(f"{COLLAPSIBLE_ROWS}!{letter}{r} [{buyer}/{label}]",
+                   V(COLLAPSIBLE_ROWS, f"{letter}{r}"), want)
+        for label, scol, _kind, agg in plan:
+            if agg != "sum":
+                continue
+            letter = letters2[label]
+            eq(f"{COLLAPSIBLE_ROWS} totals {buyer} {label}",
+               V(COLLAPSIBLE_ROWS, f"{letter}{b['totals']}"),
+               sum(num(truth(scol, x)) for x in rows))
+
+    # ================= LEDGER - LOTS ACROSS =============================== #
+    ws = wb[LEDGER_COLS]
+    total_letter = openpyxl.utils.get_column_letter(1 + lots + 1)
+    lot_cols = {}
+    for c in ws[4]:
+        if c.column > 1 and isinstance(c.value, str) and c.value.startswith("=IF("):
+            lot_cols[c.column_letter] = int(re.search(r"\$[A-Z]{1,2}\$(\d+)", c.value).group(1))
+    rows4 = {}
+    for r in range(6, ws.max_row + 1):
+        a = ws[f"A{r}"].value
+        if isinstance(a, str) and a.startswith("      "):
+            rows4[a.strip()] = r
+    print(f"ledger (lots across): {len(lot_cols)} lot columns, {len(rows4)} field rows, "
+          f"total column {total_letter}")
+    checks += 1
+    if sorted(lot_cols.values()) != sorted(x for rs in buyers.values() for x in rs):
+        fails.append(f"{LEDGER_COLS}: lot columns {sorted(lot_cols.values())} do not match the source lots")
+    assert len(rows4) == len(plan), (len(rows4), len(plan))
+    for label, scol, _kind, agg in plan:
+        r = rows4[label]
+        for letter, srow in lot_cols.items():
+            if label == "Payment Status":
+                o = num(truth("AD", srow), None)
+                want = "" if o is None else ("SETTLED" if o <= 0 else "OUTSTANDING")
+            else:
+                t = truth(scol, srow)
+                want = "" if t is None else t
+            eq(f"{LEDGER_COLS}!{letter}{r} [{label}]", V(LEDGER_COLS, f"{letter}{r}"), want)
+        if agg == "sum":
+            eq(f"{LEDGER_COLS} TOTAL {label}", V(LEDGER_COLS, f"{total_letter}{r}"),
+               sum(num(truth(scol, x)) for rs in buyers.values() for x in rs))
+        else:
+            eq(f"{LEDGER_COLS} TOTAL dash {label}", V(LEDGER_COLS, f"{total_letter}{r}"), "\u2013")
 
     print(f"\nchecks run: {checks}")
     if fails:

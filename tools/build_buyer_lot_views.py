@@ -33,8 +33,14 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
 
 SRC = "Final Calculation Sheet"
-COLLAPSIBLE = "Buyer Collapsible View"
-LEDGER = "Lot Ledger (Filter)"
+# four views, two per layout: fields-down/lots-across and lots-down/fields-across
+COLLAPSIBLE = "Collapsible - Lots Across"        # fields as rows, lots as columns
+COLLAPSIBLE_ROWS = "Collapsible - Lots Down"     # lots as rows, fields as columns
+LEDGER = "Ledger Filter - Lots Down"             # lots as rows, fields as columns
+LEDGER_COLS = "Ledger Filter - Lots Across"      # fields as rows, lots as columns
+ALL_VIEWS = (COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
+# sheets from the first revision, renamed since - dropped so they do not linger
+LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
 LAST_SRC_ROW = 1000         # generous tail so new lots are picked up by SUMIF
 
@@ -198,7 +204,8 @@ def build_collapsible(wb, buyers) -> None:
     # ---- title block ----------------------------------------------------- #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = "MSTC LIMITED  \u2022  BUYER \u00d7 LOT COLLAPSIBLE VIEW"
+    c.value = ("MSTC LIMITED  \u2022  BUYER \u00d7 LOT COLLAPSIBLE VIEW   "
+               "(fields \u2193 rows  |  lots \u2192 columns)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -451,7 +458,8 @@ def build_ledger(wb, buyers) -> None:
     # ---- title + instructions -------------------------------------------- #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = "MSTC LIMITED  \u2022  BUYER & LOT LEDGER  (filter + fold)"
+    c.value = ("MSTC LIMITED  \u2022  BUYER & LOT LEDGER  (filter + fold)   "
+               "(lots \u2193 rows  |  fields \u2192 columns)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -637,26 +645,379 @@ def build_ledger(wb, buyers) -> None:
     ws.print_title_rows = f"{hdr}:{hdr}"
 
 
+# --------------------------------------------------------------------------- #
+# sheet 3 - collapsible, lots as rows / fields as columns
+# --------------------------------------------------------------------------- #
+def plan_fields():
+    """The field catalogue as a column plan for the lots-as-rows layouts."""
+    return [(label, scol, kind, agg) for _n, fields in SECTIONS
+            for (label, scol, kind, agg) in fields]
+
+
+SECTION_COLOURS = ["1F4E79", "C55A11", "548235", "7030A0", "00838F", "C00000", "BF8F00"]
+
+
+def colour_of(label):
+    for (name, fields), colour in zip(SECTIONS, SECTION_COLOURS):
+        if label in [f[0] for f in fields]:
+            return colour
+    return "404040"
+
+
+def build_collapsible_rows(wb, buyers):
+    """One colour block per buyer; inside it one row per lot."""
+    ws = wb.create_sheet(COLLAPSIBLE_ROWS)
+    plan = plan_fields()
+    letters = {}
+    for i, (label, _s, kind, _a) in enumerate(plan):
+        letter = get_column_letter(i + 1)
+        letters[label] = letter
+        ws.column_dimensions[letter].width = WIDTHS.get(
+            label, 13.5 if kind in ("num0", "dec") else 12)
+    last_col = letters[plan[-1][0]]
+
+    ws.sheet_properties.tabColor = "FFC000"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    ws.sheet_properties.outlinePr.summaryRight = False
+    ws.sheet_format.outlineLevelRow = 1
+    ws.sheet_format.outlineLevelCol = 1
+
+    ws.merge_cells(f"A1:{last_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  BUYER \u00d7 LOT COLLAPSIBLE VIEW   "
+               "(lots \u2193 rows  |  fields \u2192 columns)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  the \u2212 / + buttons in the left margin fold a buyer: its lots hide and the "
+               "banner plus the \u2211 totals row stay on screen   \u2022   the \u2212 above a column category "
+               "(LOT INFO, FINANCIALS \u2026) folds those columns away, keeping the category's first column   "
+               "\u2022   every figure is a live link to 'Final Calculation Sheet'   \u2022   for filtering use "
+               f"'{LEDGER}' or '{LEDGER_COLS}'")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 30
+
+    # category band + header row ------------------------------------------- #
+    band, hdr = 3, 4
+    i = 0
+    for (name, fields), colour in zip(SECTIONS, SECTION_COLOURS):
+        n = len(fields)
+        c1, c2 = get_column_letter(i + 1), get_column_letter(i + n)
+        if c1 != c2:
+            ws.merge_cells(f"{c1}{band}:{c2}{band}")
+        for k in range(i, i + n):
+            cc = ws.cell(row=band, column=k + 1)
+            cc.fill = fill(colour)
+            cc.border = BOX
+            if k > i:                      # first column of a category stays visible
+                ws.column_dimensions[get_column_letter(k + 1)].outlineLevel = 1
+        cc = ws[f"{c1}{band}"]
+        cc.value = name
+        cc.font = Font(bold=True, size=9, color="FFFFFF")
+        cc.alignment = CENTER
+        i += n
+    for label, _s, _k, _a in plan:
+        cc = ws[f"{letters[label]}{hdr}"]
+        cc.value = label
+        cc.font = Font(bold=True, size=9, color="FFFFFF")
+        cc.fill = fill(colour_of(label))
+        cc.alignment = CENTER
+        cc.border = BOX
+    ws.row_dimensions[band].height = 17
+    ws.row_dimensions[hdr].height = 42
+    ws.freeze_panes = f"C{hdr + 1}"
+
+    # buyer blocks ---------------------------------------------------------- #
+    r = hdr + 1
+    for bi, (buyer, rows) in enumerate(buyers.items()):
+        accent, tint, pale = THEMES[bi % len(THEMES)]
+        ws.merge_cells(start_row=r, start_column=1, end_row=r,
+                       end_column=len(plan))
+        c = ws.cell(row=r, column=1)
+        c.value = (f'="\u25bc  {buyer}   \u2022   "&COUNTIF({criteria(buyer)})&" LOT(S)   \u2022   '
+                   f'MAT. VALUE \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$H${FIRST_DATA_ROW}:$H${LAST_SRC_ROW}),"#,##0")'
+                   f'&"   \u2022   RECEIVED \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$AC${FIRST_DATA_ROW}:$AC${LAST_SRC_ROW}),"#,##0")'
+                   f'&"   \u2022   OUTSTANDING \u20b9"&TEXT(SUMIF({criteria(buyer)},\'{SRC}\'!$AD${FIRST_DATA_ROW}:$AD${LAST_SRC_ROW}),"#,##0")')
+        c.font = Font(bold=True, size=12, color="FFFFFF")
+        c.fill = fill(accent)
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[r].height = 24
+        for col in range(1, len(plan) + 1):
+            ws.cell(row=r, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+        r += 1
+
+        first_lot = r
+        for k, srow in enumerate(rows):
+            for label, scol, kind, _a in plan:
+                cc = ws[f"{letters[label]}{r}"]
+                cc.value = status_formula(srow) if scol is None else src(scol, srow)
+                cc.number_format = KIND_FMT[kind]
+                cc.font = Font(size=9, color="333333")
+                cc.alignment = (LEFTW if label == "Lot Name"
+                                else LEFT if kind == "text" else RIGHT)
+                cc.fill = fill(pale if k % 2 else tint)
+                cc.border = BOX
+            ws.row_dimensions[r].outlineLevel = 1
+            ws.row_dimensions[r].height = 15
+            r += 1
+        last_lot = r - 1
+
+        c = ws.cell(row=r, column=1, value=f"\u2211  {buyer} \u2014 TOTALS")
+        c.font = Font(bold=True, size=10, color="FFFFFF")
+        c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        for label, _s, kind, agg in plan:
+            cc = ws[f"{letters[label]}{r}"]
+            if agg == "sum":
+                cc.value = f"=SUM({letters[label]}{first_lot}:{letters[label]}{last_lot})"
+                cc.number_format = KIND_FMT[kind]
+                cc.alignment = RIGHT
+            elif label != "Lot No.":
+                cc.value = "\u2013"
+                cc.alignment = CENTER
+            cc.font = Font(bold=True, size=10, color="FFFFFF")
+            cc.fill = fill(accent)
+            cc.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+        ws.row_dimensions[r].height = 20
+        r += 1
+
+        for col in range(1, len(plan) + 1):
+            ws.cell(row=r, column=col).fill = fill("EDEDED")
+        ws.row_dimensions[r].height = 7
+        r += 1
+
+    # conditional formatting ------------------------------------------------ #
+    out_col = letters["Outstanding (\u20b9)"]
+    status_col = letters["Payment Status"]
+    inv_col = letters["Invoice No."]
+    first_lot, last_row = hdr + 2, r - 1
+    ws.conditional_formatting.add(
+        f"{out_col}{first_lot}:{out_col}{last_row}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                   fill=fill("FFC7CE")))
+    ws.conditional_formatting.add(
+        f"{status_col}{first_lot}:{status_col}{last_row}",
+        CellIsRule(operator="equal", formula=['"SETTLED"'], font=Font(bold=True, color="006100"),
+                   fill=fill("C6EFCE")))
+    ws.conditional_formatting.add(
+        f"{status_col}{first_lot}:{status_col}{last_row}",
+        CellIsRule(operator="equal", formula=['"OUTSTANDING"'], font=Font(bold=True, color="9C0006"),
+                   fill=fill("FFC7CE")))
+    # only lot rows (a numeric lot no. in column A) - banners and totals stay clean
+    ws.conditional_formatting.add(
+        f"{inv_col}{first_lot}:{inv_col}{last_row}",
+        FormulaRule(formula=[f'AND(ISNUMBER($A{first_lot}),${inv_col}{first_lot}="")'],
+                    fill=fill("FFE699")))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = f"{hdr}:{hdr}"
+
+
+# --------------------------------------------------------------------------- #
+# sheet 4 - ledger, fields as rows / lots as columns
+# --------------------------------------------------------------------------- #
+def build_ledger_cols(wb, buyers):
+    """One flat table: every lot is a column, every field a row, with a filter."""
+    ws = wb.create_sheet(LEDGER_COLS)
+    all_lots = [(buyer, srow) for buyer, rows in buyers.items() for srow in rows]
+    n = len(all_lots)
+    total_col = get_column_letter(1 + n + 1)
+
+    ws.sheet_properties.tabColor = "00B0F0"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    ws.sheet_properties.outlinePr.summaryRight = True
+    ws.sheet_format.outlineLevelRow = 1
+    ws.sheet_format.outlineLevelCol = 1
+
+    ws.column_dimensions["A"].width = 34
+    for i in range(n):
+        cd = ws.column_dimensions[get_column_letter(2 + i)]
+        cd.width = 14
+        cd.outlineLevel = 1                    # fold every lot column at once
+    ws.column_dimensions[total_col].width = 17
+
+    ws.merge_cells(f"A1:{total_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  BUYER & LOT LEDGER  (filter + fold)   "
+               "(fields \u2193 rows  |  lots \u2192 columns)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{total_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  filter with the \u25bc arrow on the FIELD column in row 5 to keep only the "
+               "lines you need   \u2022   the \u2212 / + in the left margin folds a whole field category   "
+               f"\u2022   the \u2212 / + above column {total_col} folds all {n} lot columns away and keeps the "
+               "totals   \u2022   every figure is a live link to 'Final Calculation Sheet'")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 30
+
+    # buyer band (row 3) - one merged, colour coded strip per buyer ---------- #
+    col = 2
+    for bi, (buyer, rows) in enumerate(buyers.items()):
+        accent = THEMES[bi % len(THEMES)][0]
+        span = len(rows)
+        if span > 1:
+            ws.merge_cells(start_row=3, start_column=col, end_row=3,
+                           end_column=col + span - 1)
+        cc = ws.cell(row=3, column=col, value=f"{buyer}  ({span})")
+        cc.font = Font(bold=True, size=9, color="FFFFFF")
+        cc.alignment = CENTER
+        for k in range(span):
+            x = ws.cell(row=3, column=col + k)
+            x.fill = fill(accent)
+            x.border = BOX
+        col += span
+    c = ws.cell(row=3, column=1, value="BUYER  \u2192")
+    c.font = Font(bold=True, size=9, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.cell(row=3, column=2 + n).fill = fill("404040")
+    ws.row_dimensions[3].height = 18
+
+    # lot number band (row 4) ------------------------------------------------ #
+    c = ws.cell(row=4, column=1, value="LOT NO.  \u2192")
+    c.font = Font(bold=True, size=9, color="1F3864")
+    c.fill = fill("DDEBF7")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for i, (_b, srow) in enumerate(all_lots):
+        cc = ws.cell(row=4, column=2 + i, value=src("F", srow))
+        cc.number_format = KIND_FMT["num0"]
+        cc.font = Font(bold=True, size=9, color="1F3864")
+        cc.fill = fill("DDEBF7")
+        cc.alignment = CENTER
+        cc.border = BOX
+    cc = ws.cell(row=4, column=2 + n, value="\u2211 ALL")
+    cc.font = Font(bold=True, size=9, color="1F3864")
+    cc.fill = fill("DDEBF7")
+    cc.alignment = CENTER
+    ws.row_dimensions[4].height = 18
+
+    # header row (row 5) - carries the AutoFilter ---------------------------- #
+    hdr = 5
+    c = ws.cell(row=hdr, column=1, value="FIELD  \u25b8")
+    for i in range(n):
+        ws.cell(row=hdr, column=2 + i, value=f"LOT {i + 1}")
+    ws.cell(row=hdr, column=2 + n, value="TOTAL")
+    for k in range(1, 3 + n):
+        cc = ws.cell(row=hdr, column=k)
+        cc.font = Font(bold=True, size=9, color="FFFFFF")
+        cc.fill = fill("404040")
+        cc.alignment = CENTER
+        cc.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 26
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # category header rows + field rows ------------------------------------- #
+    r = hdr + 1
+    field_rows = {}
+    for (name, fields), colour in zip(SECTIONS, SECTION_COLOURS):
+        for k in range(1, 3 + n):
+            cc = ws.cell(row=r, column=k)
+            cc.fill = fill(colour)
+            cc.border = BOX
+        cc = ws.cell(row=r, column=1, value=f"  \u25b8 {name}")
+        cc.font = Font(bold=True, size=10, color="FFFFFF")
+        cc.alignment = LEFT
+        ws.row_dimensions[r].height = 17
+        r += 1
+        for label, scol, kind, agg in fields:
+            cc = ws.cell(row=r, column=1, value=f"      {label}")
+            cc.font = Font(size=10, color="333333")
+            cc.alignment = LEFT
+            field_rows[label] = r
+            for i, (_b, srow) in enumerate(all_lots):
+                x = ws.cell(row=r, column=2 + i)
+                x.value = status_formula(srow) if scol is None else src(scol, srow)
+                x.number_format = KIND_FMT[kind]
+                x.font = Font(size=9 if label == "Lot Name" else 10,
+                              bold=(scol is None))
+                x.alignment = LEFTW if label == "Lot Name" else (
+                    LEFT if kind == "text" else RIGHT)
+                x.border = BOX
+                if i % 2:
+                    x.fill = fill("F7F7F7")
+            t = ws.cell(row=r, column=2 + n)
+            if agg == "sum":
+                t.value = f"=SUM(B{r}:{get_column_letter(1 + n)}{r})"
+                t.number_format = KIND_FMT[kind]
+                t.font = Font(bold=True, size=10, color="1F3864")
+                t.alignment = RIGHT
+            else:
+                t.value = "\u2013"
+                t.font = Font(size=10, color="808080")
+                t.alignment = CENTER
+            t.fill = fill("DDEBF7")
+            for k in range(1, 3 + n):
+                ws.cell(row=r, column=k).border = BOX
+            ws.cell(row=r, column=2 + n).border = Border(
+                left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+            ws.row_dimensions[r].outlineLevel = 1
+            ws.row_dimensions[r].height = 44 if label == "Lot Name" else 15
+            r += 1
+
+    last_row = r - 1
+    ws.auto_filter.ref = f"A{hdr}:{total_col}{last_row}"
+
+    # conditional formatting ------------------------------------------------ #
+    for label, rules in (
+            ("Outstanding (\u20b9)", [
+                CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                           fill=fill("FFC7CE")),
+                CellIsRule(operator="lessThanOrEqual", formula=["0"], font=Font(bold=True, color="006100"))]),
+            ("Payment Status", [
+                CellIsRule(operator="equal", formula=['"SETTLED"'], font=Font(bold=True, color="006100"),
+                           fill=fill("C6EFCE")),
+                CellIsRule(operator="equal", formula=['"OUTSTANDING"'], font=Font(bold=True, color="9C0006"),
+                           fill=fill("FFC7CE"))]),
+            ("Invoice No.", [CellIsRule(operator="equal", formula=['""'], fill=fill("FFE699"))])):
+        rr = field_rows[label]
+        for rule in rules:
+            ws.conditional_formatting.add(f"B{rr}:{get_column_letter(1 + n)}{rr}", rule)
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
         raise SystemExit(f"source sheet '{SRC}' not found in {path}")
-    for name in (COLLAPSIBLE, LEDGER):
+    for name in ALL_VIEWS + LEGACY_VIEWS:
         if name in wb.sheetnames:
             del wb[name]
     buyers = read_lots(wb[SRC])
     build_collapsible(wb, buyers)
+    build_collapsible_rows(wb, buyers)
     build_ledger(wb, buyers)
-    wb.active = wb.sheetnames.index(COLLAPSIBLE)
+    build_ledger_cols(wb, buyers)
+    wb.active = wb.sheetnames.index(COLLAPSIBLE_ROWS)
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.
-    for name in (COLLAPSIBLE, LEDGER):
+    for name in ALL_VIEWS:
         wb[name].column_dimensions.to_tree()
     wb.save(path)
     lots = sum(len(v) for v in buyers.values())
-    print(f"{path}: rebuilt '{COLLAPSIBLE}' + '{LEDGER}' "
-          f"({len(buyers)} buyers, {lots} lots, widest buyer {max(len(v) for v in buyers.values())} lots)")
+    print(f"{path}: rebuilt {len(ALL_VIEWS)} views for {len(buyers)} buyers / {lots} lots "
+          f"(widest buyer {max(len(v) for v in buyers.values())} lots): " + ", ".join(ALL_VIEWS))
 
 
 if __name__ == "__main__":
