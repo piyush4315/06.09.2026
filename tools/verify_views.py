@@ -666,18 +666,19 @@ def main(path):
            + ("" if test9 in ("is blank", "is not blank") else f" {value9}"))
 
     # ================= LIVE SEARCH ========================================= #
-    # rows re-fill from the search box, so the empty search is checked from the
-    # main recalculation and each search term needs its own run
+    # the rows never move - a hidden flag column says which ones match, so the
+    # flags, the match count and the SUMIF totals are what get checked
     ws = wb[LIVE_SEARCH]
     src_ws10 = wb[SRC]
     label_of10 = {scol: lbl for scol, lbl in transpose_labels(src_ws10)}
     srows10 = lot_rows(src_ws10)
     n10 = len(srows10)
-    lotno_row = {}
-    for srow in srows10:
-        lotno_row[num(truth("F", srow))] = srow
     heads10 = ["#"] + [label_of10[c] for c in SEARCH_COLS] + ["Payment Status"]
-    checks += 5
+    hit_col10 = None
+    for c in ws[3]:
+        if isinstance(c.value, str) and c.value.startswith("1 ="):
+            hit_col10 = c.column_letter
+    checks += 6
     if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
         fails.append(f"{LIVE_SEARCH}: header row is not {heads10[:4]}...")
     if ws["B3"].value not in (None, ""):
@@ -690,47 +691,49 @@ def main(path):
                      f"{[str(dv.sqref) for dv in ws.data_validations.dataValidation]}, expected F3")
     if ws.freeze_panes != "C5":
         fails.append(f"{LIVE_SEARCH}: freeze {ws.freeze_panes}, expected C5")
+    if hit_col10 is None:
+        fails.append(f"{LIVE_SEARCH}: no hidden match-flag column found")
+    rules10 = [(str(r.sqref), ru.type, tuple(ru.formula or ()))
+               for r in ws.conditional_formatting for ru in r.rules]
+    if sum(1 for _q, t, f in rules10 if t == "expression"
+           and any("$B$3" in x for x in f)) != 3:
+        fails.append(f"{LIVE_SEARCH}: expected 3 search-driven conditional formats, "
+                     f"found {rules10}")
 
-    def lrows(vals):
-        """{result row: source row} for the lots the search box currently lets through"""
-        out = {}
-        for r in range(5, 5 + n10):
-            no = vals.get((LIVE_SEARCH.upper(), f"B{r}"))
-            if no not in (None, "", "empty"):
-                out[r] = lotno_row[num(no)]
-        return out
-
-    def check_live(vals, tag):
-        got = lrows(vals)
-        for r, srow in got.items():
+    def check_live10(vals, tag, pred):
+        """every row keeps its lot; check the flag, the count and the totals"""
+        hits = []
+        for k, srow in enumerate(srows10):
+            rr = 5 + k
+            want = 1 if pred(srow) else 0
+            if want:
+                hits.append(srow)
+            eq(f"{LIVE_SEARCH}!{hit_col10}{rr} [match flag/lot row {srow}] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"{hit_col10}{rr}")), want)
             for i, scol in enumerate(SEARCH_COLS):
                 L = get_column_letter(2 + i)
                 t = truth(scol, srow)
-                eq(f"{LIVE_SEARCH}!{L}{r} [{label_of10[scol]}/lot row {srow}] {tag}",
-                   vals.get((LIVE_SEARCH.upper(), f"{L}{r}")), "" if t is None else t)
+                eq(f"{LIVE_SEARCH}!{L}{rr} [{label_of10[scol]}/lot row {srow}] {tag}",
+                   vals.get((LIVE_SEARCH.upper(), f"{L}{rr}")), "" if t is None else t)
             ad = truth("AD", srow)
-            eq(f"{LIVE_SEARCH}!AI{r} [status/lot row {srow}] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"AI{r}")),
-               "SETTLED" if num(ad) <= 0 else "OUTSTANDING")
-            eq(f"{LIVE_SEARCH}!A{r} [match # /lot row {srow}] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"A{r}")), len([x for x in got if x <= r]))
-        for i, scol in enumerate(SEARCH_COLS):
-            L = get_column_letter(2 + i)
-            if scol in ADDITIVE_SRC_COLS:
-                # the total stays blank when every lot on screen is blank
-                v10 = [truth(scol, x) for x in got.values()]
-                eq(f"{LIVE_SEARCH}!{L}42 [{label_of10[scol]}/TOTAL] {tag}",
-                   vals.get((LIVE_SEARCH.upper(), f"{L}42")),
-                   "" if not v10 or all(x is None for x in v10) else sum(num(x) for x in v10))
+            eq(f"{LIVE_SEARCH}!AI{rr} [status/lot row {srow}] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"AI{rr}")),
+               "" if ad is None else ("SETTLED" if num(ad) <= 0 else "OUTSTANDING"))
+            eq(f"{LIVE_SEARCH}!A{rr} [row #/lot row {srow}] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"A{rr}")), k + 1)
         eq(f"{LIVE_SEARCH}!H3 [matches] {tag}", vals.get((LIVE_SEARCH.upper(), "H3")),
-           f"{len(got)} of {n10}")
-        return got
+           f"{len(hits)} of {n10}")
+        for i, scol in enumerate(SEARCH_COLS):
+            if scol not in ADDITIVE_SRC_COLS:
+                continue
+            L = get_column_letter(2 + i)
+            eq(f"{LIVE_SEARCH}!{L}42 [{label_of10[scol]}/TOTAL] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"{L}42")),
+               sum(num(truth(scol, x)) for x in hits))
+        return hits
 
-    shown = check_live(vals, "[empty search]")
-    print(f"live search: empty box lets {len(shown)} of {n10} lots through")
-    checks += 1
-    if sorted(shown.values()) != sorted(srows10):
-        fails.append(f"{LIVE_SEARCH}: the empty search shows {len(shown)} lots, expected all {n10}")
+    hits10 = check_live10(vals, "[empty search]", lambda r: True)
+    print(f"live search: empty box matches all {len(hits10)} lots, rows stay put")
 
     for text10, sin10 in (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer")):
         tmp = f"/tmp/verify_ls_{len(text10)}{len(sin10 or '')}.xlsx"
@@ -742,18 +745,13 @@ def main(path):
         wb5.save(tmp)
         vals5 = calculate(tmp)
         if sin10 == "Buyer":
-            want10 = [x for x in srows10 if text10.upper() in str(truth("G", x)).upper()]
+            pred10 = lambda r, t=text10: t.upper() in str(truth("G", r) or "").upper()  # noqa: E731
         else:
-            want10 = [x for x in srows10
-                      if text10.upper() in " ".join(str(truth(c, x) or "")
-                                                    for c in ("F", "G", "B")).upper()]
-        got10 = sorted(check_live(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]").values())
-        print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} lot(s), "
-              f"expected {len(want10)}")
-        checks += 1
-        if got10 != sorted(want10):
-            fails.append(f"{LIVE_SEARCH}: search {text10!r} in {sin10 or SEARCH_ALL} gave "
-                         f"{got10}, expected {sorted(want10)}")
+            pred10 = lambda r, t=text10: t.upper() in " ".join(  # noqa: E731
+                str(truth(c, r) or "") for c in ("F", "G", "B")).upper()
+        got10 = check_live10(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]", pred10)
+        print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} match(es), "
+              f"the other {n10 - len(got10)} rows greyed")
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
     # four sheets share this layout; the folded ones simply reorder the columns

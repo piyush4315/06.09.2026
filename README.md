@@ -7,13 +7,13 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
-| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer, or a lot name and the table below re-fills with only the matching lots — live, as you type, no macros. Cell F3 narrows what the text is looked for in. The workbook opens here. |
-| `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. The workbook opens on this sheet. |
+| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer or a lot name and the matching lots light up green while the rest fade to grey — live, as you type, no macros, and **no row ever moves or hides**. F3 narrows what the text is looked for in, H3 counts the hits, the `∑` row totals the hits only. The workbook opens here. |
+| `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. |
 | `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same as `Final Calc (Transposed)` (label-only filter, no arrows on the 37 lot headers), kept as a separate tab with its own help line. |
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
 | `Transposed + Both Filters` | field labels ↓ rows, values → columns | The two together: the label-column filter button *and* the buyer / auction fold buttons. |
 | `Transposed - Pick a Buyer` | field labels ↓ rows, values → columns | Same transposed layout, but the lot columns follow a **buyer dropdown in B3**: pick a buyer and only its lots are shown (up to 13 columns), every figure re-pointed by INDEX/MATCH. No macros. |
-| `Transposed - Filter Values` | field labels ↓ rows, values → columns | Same grid, plus a **query panel in row 3**: pick a buyer, pick a ROW (any of the 33 fields), a test (`>`, `contains`, `is blank` …) and a value — only the lots that pass fill the columns. This is the sheet that filters by a row's values. The workbook opens here. |
+| `Transposed - Filter Values` | field labels ↓ rows, values → columns | Same grid, plus a **query panel in row 3**: pick a buyer, pick a ROW (any of the 33 fields), a test (`>`, `contains`, `is blank` …) and a value — only the lots that pass fill the columns. This is the sheet that filters by a row's values. |
 | `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
 | `Buyer Rows (Filter)` | **buyers ↓ rows**, details → columns | One row per buyer, 30 detail columns across, a `▼` on **every** column — including `BUYER`, so ticking buyers hides the rest. The `∑ TOTAL` row uses SUBTOTAL, so it totals only the buyers left visible. |
 | `Lot-wise Vertical` | **everything downwards** | Buyer ▸ lot ▸ field, one below the other. Three fold levels: buyer → lot → field. Each buyer ends with its own `∑ TOTALS` block, the sheet ends with an all-buyers grand total. |
@@ -26,28 +26,39 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 Every figure on the fifteen views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
 
-## Live Search — type, and the rows re-fill
+## Live Search — type, and the misses fade out
 
 | | A3 | B3 | | | E3 | F3 | G3 | H3 | I3 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | 🔍 SEARCH ▸ | **187** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **3 of 37** | showing 3 of 37 lots • search: 187 • in: Lot No. + Buyer + Name |
+| | 🔍 SEARCH ▸ | **187** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **3 of 37** | matching 3 of 37 lots • search: 187 • in: Lot No. + Buyer + Name • the rest are greyed out, not hidden |
 | | # | Lot No. | Buyer | Lot Name | … | | | | |
-| | 1 | 1874 | NATIONAL ENTERPRISES | Scrap of Empty oil drum | | | | | |
-| | 2 | 1875 | F R KHANS ENTERPRISES | Scrap of Copper of faulty AC compressor | | | | | |
-| | 3 | 1876 | F R KHANS ENTERPRISES | Scrap of MS (extracted from equip cage…) | | | | | |
-| | ∑ | | | | … totals of the 3 lots on screen | | | | |
+| | 1 | *1763* | *AL HAMD TRADE CORPORATION* | *SCRAP COPPER OF T/F WINDING …* | ← greyed: still on screen, just not matching | | | | |
+| | 2 | **1874** | **NATIONAL ENTERPRISES** | **Scrap of Empty oil drum** | ← matching | | | | |
+| | 3 | **1875** | **F R KHANS ENTERPRISES** | **Scrap of Copper of faulty AC compressor** | | | | | |
+| | 4 | **1876** | **F R KHANS ENTERPRISES** | **Scrap of MS (extracted from equip cage…** | | | | | |
+| | 5 | *1923* | *OMKAR STEELS* | *SCRAP ACSR CONDUCTORS …* | ← greyed again | | | | |
+| | ∑ | | | | … totals of the 3 matching lots only | | | | |
 
+* **All 37 rows stay where they are.** Row *n* of the table is always lot *n* of
+  `Final Calculation Sheet`, so nothing jumps around while you type and the `#` column is the
+  lot's own position, 1..37. A matching lot gets a light green wash; the others keep their
+  place but fade — grey text on a grey fill — so the whole list is still readable and you can
+  still see what did *not* match.
 * Matching is **contains**, not case sensitive, so `187` finds 1874 / 1875 / 1876, `NATIONAL`
   finds all 14 lots of NATIONAL ENTERPRISES and NATIONAL SCRAP AND BUILDING MATERIAL
-  SUPPLIER, and `copper` finds the two lots with COPPER in the name. Clear the box and all 37
-  come back.
+  SUPPLIER, and `copper` finds the two lots with COPPER in the name. Clear the box and every
+  row goes back to full colour.
+* **H3** counts the hits (`3 of 37`) and the hint in **I3** echoes what you typed and where it
+  is being looked for.
 * **F3** narrows the search to one field: `Lot No.`, `Buyer`, `Lot Name`, `Bid Sheet` or
   `Unit` (default searches lot no. + buyer + name together).
-* The `∑` row totals only the lots on screen, and `Payment Status` / `Outstanding` are
-  colour coded.
-* No macro and nothing typed in. Hidden columns AK..AS do the work: AK builds the text each
-  lot is searched in, AM flags it 1/0, AO numbers the hits 1..n, AQ turns hit *n* back into a
-  source row — so every cell you see is a plain `INDEX` into `Final Calculation Sheet`.
+* The `∑` row at the bottom totals **only the matching lots** (`SUMIF` over the 1/0 flags), so
+  with `187` typed it totals those three lots' material value and outstanding, and it reads
+  blank when nothing matches. `Payment Status` / `Outstanding` keep their colours on the hits.
+* No macro and nothing typed in: every visible cell is a plain link to the source row of the
+  same number. Hidden columns AK..AO do the work — AK builds the text each lot is searched in
+  from the field chosen in F3, AM holds the 1/0 match flag that both the formatting and the
+  totals read, and AO is the drop-down list behind F3.
 
 ## Final Calc (Transposed) — the source sheet on its side
 
