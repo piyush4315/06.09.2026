@@ -7,8 +7,8 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
-| `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. |
-| `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same mirror, but the filter is **one button on the label column only** — no arrows on the 37 lot headers. The workbook opens on this sheet. |
+| `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. The workbook opens on this sheet. |
+| `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same as `Final Calc (Transposed)` (label-only filter, no arrows on the 37 lot headers), kept as a separate tab with its own help line. |
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
 | `Transposed + Both Filters` | field labels ↓ rows, values → columns | The two together: the label-column filter button *and* the buyer / auction fold buttons. |
 | `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
@@ -43,18 +43,21 @@ Exactly the same fields in exactly the same order, nothing added or dropped:
 ## Filter buttons on the row labels
 
 An AutoFilter range puts a `▼` on **every** cell of its header row, so a wide range like
-`A3:AM36` grows 39 arrows — one on each lot number. The new sheets give the labels their own
+`A3:AM36` grows 39 arrows — one on each lot number. These sheets give the labels their own
 button instead, by making the filter range a **single column**:
 
 | Sheet | Filter range | Buttons |
 | --- | --- | --- |
-| `Transposed + Field Filter` | `A3:A36` | one `▼` on `FIELD (row 3 of the source) ▸` |
+| `Final Calc (Transposed)` | `A3:A36` | one `▼` on `FIELD (row 3 of the source) ▸`, listing all 33 field names |
+| `Transposed + Field Filter` | `A3:A36` | same, on its own tab |
 | `Transposed + Lot Folds` | none | `−` / `+` fold buttons per buyer and per auction |
 | `Transposed + Both Filters` | `A5:A38` | the label `▼` **and** the fold buttons |
 | `Collapsible + Field Filter` | `A5:A563` | one `▼` on the `FIELD ▸ BUYER \| LOT →` header, stopping above the buyer index so filtering never hides the jump table |
 
 Tick a few fields — say `Outstanding`, `Total Received`, `Payment Status` — and the other rows
-hide; the 37 lot columns stay exactly where they are.
+hide; the 37 lot columns stay exactly where they are. The dropdown reads the row names down
+column A, so you filter the values *against the row name*: pick `Outstanding` and every lot's
+outstanding figure lines up across the sheet.
 
 ### Lot folds (the two grouped sheets)
 
@@ -139,5 +142,5 @@ python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install fo
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all eleven views against `Final Calculation Sheet` — 13,205 checks, including the filter
+all eleven views against `Final Calculation Sheet` — 13,211 checks, including the filter
 ranges, the freeze panes, the outline levels and the 21 buyer / 4 auction bands.

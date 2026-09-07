@@ -501,11 +501,16 @@ def main(path):
                    V(tname, f"{total_letter}{rr}"), "" if t is None else t)
 
     # ---------- structure of the four filter sheets ------------------------- #
-    spec = {TRANSPOSED: dict(hdr=3, filt="A3:AM36", freeze="B4", lvl2=0),
-            T_FIELD_FILTER: dict(hdr=3, filt="A3:A36", freeze="B4", lvl2=0),
-            T_LOT_FOLDS: dict(hdr=5, filt=None, freeze="B6", lvl2=37),
-            T_BOTH: dict(hdr=5, filt="A5:A38", freeze="B6", lvl2=37),
-            C_FIELD_FILTER: dict(hdr=5, filt="A5:A563", freeze="B6", lvl2=0)}
+    # frows = how many rows the dropdown must list (33 field rows on the
+    # transposed sheets, the whole buyer-block stack on the collapsible one)
+    spec = {TRANSPOSED: dict(hdr=3, filt="A3:A36", freeze="B4", lvl2=0, label=True, frows=33),
+            T_FIELD_FILTER: dict(hdr=3, filt="A3:A36", freeze="B4", lvl2=0, label=True, frows=33),
+            T_LOT_FOLDS: dict(hdr=5, filt=None, freeze="B6", lvl2=37, label=False, frows=0),
+            T_BOTH: dict(hdr=5, filt="A5:A38", freeze="B6", lvl2=37, label=True, frows=33),
+            # the collapsible stack carries one grey spacer row per buyer but the
+            # last, and those sit inside the filter range
+            C_FIELD_FILTER: dict(hdr=5, filt="A5:A563", freeze="B6", lvl2=0, label=True,
+                                 frows=558, blanks=len(buyers) - 1)}
     for name, sp in spec.items():
         ws = wb[name]
         checks += 2
@@ -515,11 +520,19 @@ def main(path):
             fails.append(f"{name}: freeze {ws.freeze_panes!r}, expected {sp['freeze']!r}")
         # a label-only filter must stay in one column, otherwise every header
         # cell in the range grows its own dropdown arrow
-        if sp["filt"] and sp["hdr"] > 3:
+        if sp["filt"] and sp["label"]:
             lo, hi = sp["filt"].split(":")
             checks += 1
             if re.sub(r"\d", "", lo) != re.sub(r"\d", "", hi) or re.sub(r"\d", "", lo) != "A":
                 fails.append(f"{name}: filter {sp['filt']} is not a single label column")
+            # and the dropdown must list the 33 field names, one per row
+            labels = [ws[f"A{r}"].value for r in range(sp["hdr"] + 1,
+                                                      int(re.sub(r"\D", "", hi)) + 1)]
+            blanks = sum(1 for v in labels if not (isinstance(v, str) and v.strip()))
+            checks += 1
+            if len(labels) != sp["frows"] or blanks != sp.get("blanks", 0):
+                fails.append(f"{name}: filter lists {len(labels)} rows ({blanks} blank), "
+                             f"expected {sp['frows']} rows ({sp.get('blanks', 0)} blank)")
         n2 = sum(1 for L, d in ws.column_dimensions.items() if d.outlineLevel == 2)
         checks += 1
         if n2 != sp["lvl2"]:

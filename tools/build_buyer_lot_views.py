@@ -1743,11 +1743,11 @@ def main(path: str) -> None:
                      note="HOW TO USE  \u25b6  ONE filter button, on the FIELD label cell at the top of column "
                           "A: click it and tick the fields you want to see - every other row hides.  The lot "
                           "headers carry no arrows.  Otherwise identical to 'Final Calc (Transposed)'.")
-    build_transposed(wb)
+    build_transposed(wb, filter_mode="label")   # the filter button sits on the row labels
     # the builders insert at different places, so put the tabs in ALL_VIEWS order
     for i, name in enumerate([SRC] + list(ALL_VIEWS)):
         wb.move_sheet(name, offset=i - wb.sheetnames.index(name))
-    wb.active = wb.sheetnames.index(T_FIELD_FILTER)   # opens on the new label filter
+    wb.active = wb.sheetnames.index(TRANSPOSED)   # opens on the sheet the user asked for
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.
