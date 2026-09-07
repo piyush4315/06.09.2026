@@ -8,14 +8,18 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
 | `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. |
+| `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same mirror, but the filter is **one button on the label column only** — no arrows on the 37 lot headers. The workbook opens on this sheet. |
+| `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
+| `Transposed + Both Filters` | field labels ↓ rows, values → columns | The two together: the label-column filter button *and* the buyer / auction fold buttons. |
 | `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
 | `Lot-wise Vertical` | **everything downwards** | Buyer ▸ lot ▸ field, one below the other. Three fold levels: buyer → lot → field. Each buyer ends with its own `∑ TOTALS` block, the sheet ends with an all-buyers grand total. |
 | `Collapsible - Lots Across` | fields ↓ rows, lots → columns | Colour block per buyer, its lots side by side, every field down the rows. Folds by buyer and by section. Buyer index with jump links at the bottom. |
+| `Collapsible + Field Filter` | fields ↓ rows, lots → columns | Identical to `Collapsible - Lots Across` plus **one filter button on the label column**, so a buyer's block can be reduced to, say, only its Outstanding and Total Received rows. |
 | `Collapsible - Lots Down` | lots ↓ rows, fields → columns | Colour block per buyer, one row per lot, `∑ TOTALS` row per buyer. Folds by buyer and by column category. |
 | `Ledger Filter - Lots Down` | lots ↓ rows, fields → columns | One flat table, AutoFilter on all 35 columns, lots grouped under filter aware `SUBTOTAL` buyer rows, KPI band on top. |
 | `Ledger Filter - Lots Across` | fields ↓ rows, lots → columns | One flat table, all 37 lots as columns, AutoFilter on the FIELD column, colour coded buyer band across the top. |
 
-Every figure on the five views is a **live formula** pointing at `Final Calculation Sheet` —
+Every figure on the eleven views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
 
 ## Final Calc (Transposed) — the source sheet on its side
@@ -35,6 +39,41 @@ Exactly the same fields in exactly the same order, nothing added or dropped:
   labelled `Date of Receipt (col V)` and `Date of Receipt (col Y)`.
 * Number formats are copied from the source, column A is frozen, and the `▼` on the FIELD
   column filters which rows show.
+
+## Filter buttons on the row labels
+
+An AutoFilter range puts a `▼` on **every** cell of its header row, so a wide range like
+`A3:AM36` grows 39 arrows — one on each lot number. The new sheets give the labels their own
+button instead, by making the filter range a **single column**:
+
+| Sheet | Filter range | Buttons |
+| --- | --- | --- |
+| `Transposed + Field Filter` | `A3:A36` | one `▼` on `FIELD (row 3 of the source) ▸` |
+| `Transposed + Lot Folds` | none | `−` / `+` fold buttons per buyer and per auction |
+| `Transposed + Both Filters` | `A5:A38` | the label `▼` **and** the fold buttons |
+| `Collapsible + Field Filter` | `A5:A563` | one `▼` on the `FIELD ▸ BUYER \| LOT →` header, stopping above the buyer index so filtering never hides the jump table |
+
+Tick a few fields — say `Outstanding`, `Total Received`, `Payment Status` — and the other rows
+hide; the 37 lot columns stay exactly where they are.
+
+### Lot folds (the two grouped sheets)
+
+The lot columns are sorted **auction → buyer → lot no.** and outlined in two levels, with a
+thin divider column between every two groups so the buttons never merge:
+
+```
+        1   2                                     ← outline buttons: 1 = auctions only, 2 = every buyer
+AUCTION 21977            │ AUCTION 21978 …
+F R KHANS │HIND│NATIONAL│SHAR JAHAN│STERLING │ …
+  −    −  │ −  │   −    │    −     │    −    │
+ 1763 1874 │2011│1875 1876│ 1990 2059│ 1991 …│
+```
+
+* `−` above a **thin** divider folds that buyer's lots away.
+* `−` above a **wide** divider folds a whole auction (all 5–7 buyers of it).
+* `1` / `2` above the column letters collapse every auction / every buyer in one click.
+* 37 lot columns at outline level 2, 17 buyer dividers at level 1, 3 auction dividers at
+  level 0 — `Transposed + Both Filters` is the same with the label filter on top.
 
 ## Buyer Pivot — buyers across, details down
 
@@ -95,9 +134,10 @@ lot numbers, 3 = + section headings, 4 = every field of every lot.
 
 ```bash
 pip install openpyxl
-python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all seven sheets in place
+python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all eleven sheets in place
 python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install formulas
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all seven views against `Final Calculation Sheet` — 9,358 checks.
+all eleven views against `Final Calculation Sheet` — 13,205 checks, including the filter
+ranges, the freeze panes, the outline levels and the 21 buyer / 4 auction bands.

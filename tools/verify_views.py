@@ -16,9 +16,10 @@ from collections import OrderedDict
 import openpyxl
 
 sys.path.insert(0, "tools")
-from build_buyer_lot_views import (BUYER_PIVOT, COLLAPSIBLE, COLLAPSIBLE_ROWS,  # noqa: E402
-                                   LEDGER, LEDGER_COLS, LOT_VERTICAL, PIVOT_SECTIONS,
-                                   SECTIONS, SRC, TRANSPOSED, lot_rows, plan_fields,
+from build_buyer_lot_views import (BUYER_PIVOT, C_FIELD_FILTER, COLLAPSIBLE,  # noqa: E402
+                                   COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS, LOT_VERTICAL,
+                                   PIVOT_SECTIONS, SECTIONS, SRC, T_BOTH, T_FIELD_FILTER,
+                                   T_LOT_FOLDS, TRANSPOSED, lot_rows, plan_fields,
                                    read_lots, transpose_labels)
 
 import formulas  # noqa: E402
@@ -453,41 +454,167 @@ def main(path):
 
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
+    # four sheets share this layout; the folded ones simply reorder the columns
     from openpyxl.utils import get_column_letter as _gcl
     src_ws = wb[SRC]
     fields7 = transpose_labels(src_ws)
     srows = lot_rows(src_ws)
-    ws = wb[TRANSPOSED]
-    total_letter = _gcl(2 + len(srows))
-    row_of_label = {}
-    for r in range(4, ws.max_row + 1):
-        v = ws[f"A{r}"].value
-        if isinstance(v, str) and v.strip():
-            row_of_label[v.strip()] = r
-    lot_col_of_row = {}
-    for c in ws[3]:
-        if c.column >= 2 and isinstance(c.value, str) and "$F$" in c.value:
-            lot_col_of_row[int(re.search(r"\$F\$(\d+)", c.value).group(1))] = c.column_letter
-    print(f"transposed: {len(row_of_label)} field rows, {len(lot_col_of_row)} lot columns, "
-          f"total column {total_letter} (source row {srows[-1] + 1})")
-    checks += 2
-    if len(row_of_label) != len(fields7):
-        fails.append(f"{TRANSPOSED}: {len(row_of_label)} field rows, expected {len(fields7)}")
-    if sorted(lot_col_of_row) != sorted(srows):
-        fails.append(f"{TRANSPOSED}: lot columns {sorted(lot_col_of_row)} != source rows {sorted(srows)}")
-    for scol, label in fields7:
-        rr = row_of_label.get(label)
-        if rr is None:
-            fails.append(f"{TRANSPOSED}: field row '{label}' missing")
-            continue
-        for srow in srows:
-            letter = lot_col_of_row[srow]
-            t = truth(scol, srow)
-            eq(f"{TRANSPOSED}!{letter}{rr} [{label}/lot row {srow}]",
-               V(TRANSPOSED, f"{letter}{rr}"), "" if t is None else t)
-        t = truth(scol, srows[-1] + 1)
-        eq(f"{TRANSPOSED}!{total_letter}{rr} [{label}/source total row]",
-           V(TRANSPOSED, f"{total_letter}{rr}"), "" if t is None else t)
+    total_srow = srows[-1] + 1
+    for tname, thdr in ((TRANSPOSED, 3), (T_FIELD_FILTER, 3), (T_LOT_FOLDS, 5), (T_BOTH, 5)):
+        ws = wb[tname]
+        row_of_label = {}
+        for r in range(thdr + 1, ws.max_row + 1):
+            v = ws[f"A{r}"].value
+            if isinstance(v, str) and v.strip():
+                row_of_label[v.strip()] = r
+        lot_col_of_row, total_letter = {}, None
+        for c in ws[thdr]:
+            if c.column < 2 or not isinstance(c.value, str):
+                continue
+            m = re.search(r"\$F\$(\d+)", c.value)
+            if m:
+                lot_col_of_row[int(m.group(1))] = c.column_letter
+            elif c.value.startswith("TOTAL (src row"):
+                total_letter = c.column_letter
+        print(f"{tname}: {len(row_of_label)} field rows, {len(lot_col_of_row)} lot columns, "
+              f"total column {total_letter} (source row {total_srow})")
+        checks += 3
+        if len(row_of_label) != len(fields7):
+            fails.append(f"{tname}: {len(row_of_label)} field rows, expected {len(fields7)}")
+        if sorted(lot_col_of_row) != sorted(srows):
+            fails.append(f"{tname}: lot columns {sorted(lot_col_of_row)} != source rows {sorted(srows)}")
+        if total_letter is None:
+            fails.append(f"{tname}: no TOTAL column on the header row")
+        for scol, label in fields7:
+            rr = row_of_label.get(label)
+            if rr is None:
+                fails.append(f"{tname}: field row '{label}' missing")
+                continue
+            for srow in srows:
+                letter = lot_col_of_row[srow]
+                t = truth(scol, srow)
+                eq(f"{tname}!{letter}{rr} [{label}/lot row {srow}]",
+                   V(tname, f"{letter}{rr}"), "" if t is None else t)
+            if total_letter:
+                t = truth(scol, total_srow)
+                eq(f"{tname}!{total_letter}{rr} [{label}/source total row]",
+                   V(tname, f"{total_letter}{rr}"), "" if t is None else t)
+
+    # ---------- structure of the four filter sheets ------------------------- #
+    spec = {TRANSPOSED: dict(hdr=3, filt="A3:AM36", freeze="B4", lvl2=0),
+            T_FIELD_FILTER: dict(hdr=3, filt="A3:A36", freeze="B4", lvl2=0),
+            T_LOT_FOLDS: dict(hdr=5, filt=None, freeze="B6", lvl2=37),
+            T_BOTH: dict(hdr=5, filt="A5:A38", freeze="B6", lvl2=37),
+            C_FIELD_FILTER: dict(hdr=5, filt="A5:A563", freeze="B6", lvl2=0)}
+    for name, sp in spec.items():
+        ws = wb[name]
+        checks += 2
+        if ws.auto_filter.ref != sp["filt"]:
+            fails.append(f"{name}: autofilter {ws.auto_filter.ref!r}, expected {sp['filt']!r}")
+        if ws.freeze_panes != sp["freeze"]:
+            fails.append(f"{name}: freeze {ws.freeze_panes!r}, expected {sp['freeze']!r}")
+        # a label-only filter must stay in one column, otherwise every header
+        # cell in the range grows its own dropdown arrow
+        if sp["filt"] and sp["hdr"] > 3:
+            lo, hi = sp["filt"].split(":")
+            checks += 1
+            if re.sub(r"\d", "", lo) != re.sub(r"\d", "", hi) or re.sub(r"\d", "", lo) != "A":
+                fails.append(f"{name}: filter {sp['filt']} is not a single label column")
+        n2 = sum(1 for L, d in ws.column_dimensions.items() if d.outlineLevel == 2)
+        checks += 1
+        if n2 != sp["lvl2"]:
+            fails.append(f"{name}: {n2} level-2 columns, expected {sp['lvl2']}")
+    print(f"filter sheets: autofilter / freeze / outline levels checked for {len(spec)} sheets")
+
+    # ---------- the folded sheets: order, groups and bands ------------------- #
+    for name in (T_LOT_FOLDS, T_BOTH):
+        ws = wb[name]
+        hdr = 5
+        order = []
+        for c in ws[hdr]:
+            if c.column >= 2 and isinstance(c.value, str) and "$F$" in c.value:
+                order.append((c.column_letter, int(re.search(r"\$F\$(\d+)", c.value).group(1))))
+        keys = [(src_ws[f"D{r}"].value, str(src_ws[f"G{r}"].value).strip(),
+                 float(src_ws[f"F{r}"].value)) for _l, r in order]
+        checks += 1
+        if keys != sorted(keys):
+            fails.append(f"{name}: lot columns are not sorted by auction, buyer, lot no.")
+        runs, auctions = [], []
+        for (letter, srow), key in zip(order, keys):
+            if runs and runs[-1][0] == key[:2]:
+                runs[-1][2].append(letter)
+            else:
+                runs.append((key[:2], None, [letter]))
+            if not auctions or auctions[-1][0] != key[0]:
+                auctions.append((key[0], letter, letter))
+            else:
+                auctions[-1] = (key[0], auctions[-1][1], letter)
+        print(f"{name}: {len(runs)} buyer runs across {len(auctions)} auctions")
+        checks += 2
+        if len(runs) != 21 or len(auctions) != 4:
+            fails.append(f"{name}: {len(runs)} buyer runs / {len(auctions)} auctions, expected 21 / 4")
+        # a band is any labelled cell on row 3 / 4; single-column runs are not merged
+        bands = {}
+        for rr_ in (3, 4):
+            for c in ws[rr_]:
+                if c.column >= 2 and isinstance(c.value, str) and c.value.strip():
+                    last = c.column
+                    for m in ws.merged_cells.ranges:
+                        if m.min_row == rr_ and m.min_col == c.column:
+                            last = m.max_col
+                    bands.setdefault(rr_, []).append((c.column, last, c.value.strip()))
+            bands.setdefault(rr_, []).sort()
+        checks += 2
+        if len(bands.get(4, [])) != len(runs):
+            fails.append(f"{name}: {len(bands.get(4, []))} buyer bands, expected {len(runs)}")
+        if len(bands.get(3, [])) != len(auctions):
+            fails.append(f"{name}: {len(bands.get(3, []))} auction bands, expected {len(auctions)}")
+        # each buyer band must cover exactly that buyer's lot columns
+        from openpyxl.utils import column_index_from_string as _cix
+        for (_key, _x, letters), (c1, c2, text) in zip(
+                runs, sorted(bands.get(4, []), key=lambda b: b[0])):
+            checks += 1
+            if (c1, c2) != (_cix(letters[0]), _cix(letters[-1])) or text.split("  (")[0] != _key[1]:
+                fails.append(f"{name}: buyer band {text!r} at cols {c1}-{c2} != "
+                             f"{_key[1]} over {letters[0]}-{letters[-1]}")
+        # a level-1 column must sit between every two buyer runs of one auction
+        n1 = sum(1 for L, d in ws.column_dimensions.items() if d.outlineLevel == 1)
+        checks += 1
+        if n1 != len(runs) - len(auctions):
+            fails.append(f"{name}: {n1} level-1 divider columns, expected {len(runs) - len(auctions)}")
+
+    # ---------- Collapsible + Field Filter mirrors Collapsible - Lots Across - #
+    a, b = wb[COLLAPSIBLE], wb[C_FIELD_FILTER]
+    checks += 1
+    if (a.max_row, a.max_column) != (b.max_row, b.max_column):
+        fails.append(f"{C_FIELD_FILTER}: size {b.max_row}x{b.max_column} != "
+                     f"{a.max_row}x{a.max_column}")
+    diff = 0
+    for ra, rb in zip(a.iter_rows(min_row=1, max_row=a.max_row, max_col=a.max_column),
+                      b.iter_rows(min_row=1, max_row=b.max_row, max_col=b.max_column)):
+        for ca, cb in zip(ra, rb):
+            if ca.value != cb.value:
+                diff += 1
+                if diff < 4:
+                    fails.append(f"{C_FIELD_FILTER}!{cb.coordinate}: {cb.value!r} != "
+                                 f"{COLLAPSIBLE}!{ca.coordinate}: {ca.value!r}")
+    checks += 1
+    if diff:
+        fails.append(f"{C_FIELD_FILTER}: {diff} cells differ from {COLLAPSIBLE}")
+    lvl_diff = sum(1 for r in range(1, a.max_row + 1)
+                   if a.row_dimensions[r].outlineLevel != b.row_dimensions[r].outlineLevel)
+    checks += 1
+    if lvl_diff:
+        fails.append(f"{C_FIELD_FILTER}: {lvl_diff} rows differ in outline level")
+    jump = sum(1 for r in range(1, b.max_row + 1)
+               if b[f"A{r}"].hyperlink is not None
+               and b[f"A{r}"].hyperlink.location.startswith(f"'{C_FIELD_FILTER}'!"))
+    checks += 1
+    if jump != len(buyers):
+        fails.append(f"{C_FIELD_FILTER}: {jump} index links point at its own sheet, "
+                     f"expected {len(buyers)}")
+    print(f"{C_FIELD_FILTER}: mirrored {a.max_row}x{a.max_column} of {COLLAPSIBLE}, "
+          f"{jump} jump links, {diff} cell diffs")
 
     print(f"\nchecks run: {checks}")
     if fails:

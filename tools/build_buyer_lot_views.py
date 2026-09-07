@@ -42,8 +42,14 @@ LEDGER_COLS = "Ledger Filter - Lots Across"      # fields as rows, lots as colum
 LOT_VERTICAL = "Lot-wise Vertical"               # buyer > lot > fields, all downwards
 BUYER_PIVOT = "Buyer Pivot"                      # buyers across, every detail down
 TRANSPOSED = "Final Calc (Transposed)"           # the source sheet, turned on its side
-ALL_VIEWS = (TRANSPOSED, BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS,
-             LEDGER, LEDGER_COLS)
+T_FIELD_FILTER = "Transposed + Field Filter"     # one filter button on the label column
+T_LOT_FOLDS = "Transposed + Lot Folds"           # per buyer / per auction fold buttons
+T_BOTH = "Transposed + Both Filters"             # the two together
+C_FIELD_FILTER = "Collapsible + Field Filter"    # collapsible blocks + label filter
+# in workbook order: the sheet built LAST is the one that lands at index 1
+ALL_VIEWS = (TRANSPOSED, T_FIELD_FILTER, T_LOT_FOLDS, T_BOTH,
+             BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, C_FIELD_FILTER,
+             COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
@@ -186,14 +192,15 @@ def read_lots(ws) -> "OrderedDict[str, list[int]]":
 # --------------------------------------------------------------------------- #
 # sheet 1 - transposed collapsible view
 # --------------------------------------------------------------------------- #
-def build_collapsible(wb, buyers) -> None:
+def build_collapsible(wb, buyers, sheet_name=None, field_filter=False, tab="ED7D31") -> None:
     n_lots = max(len(v) for v in buyers.values())
-    ws = wb.create_sheet(COLLAPSIBLE)
+    my_name = sheet_name or COLLAPSIBLE
+    ws = wb.create_sheet(my_name)
     last_idx = 1 + n_lots + 1                       # A + lot columns + total
     last_col = get_column_letter(last_idx)
     total_col = last_col
 
-    ws.sheet_properties.tabColor = "ED7D31"
+    ws.sheet_properties.tabColor = tab
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.outlinePr.summaryBelow = False    # banner heads the group
     ws.sheet_format.outlineLevelRow = 2
@@ -345,6 +352,7 @@ def build_collapsible(wb, buyers) -> None:
         ws.row_dimensions[r].height = 7
         r += 1
 
+    last_block_row = r - 2                    # last field row of the last block
     # ---- buyer index (bottom of the sheet) -------------------------------- #
     idx_title = r + 1
     ws.merge_cells(start_row=idx_title, start_column=1, end_row=idx_title, end_column=last_idx)
@@ -371,7 +379,7 @@ def build_collapsible(wb, buyers) -> None:
         accent, tint, pale = THEMES[bi % len(THEMES)]
         rr = first_idx + bi
         c = ws.cell(row=rr, column=1, value=buyer)
-        c.hyperlink = Hyperlink(ref=c.coordinate, location=f"'{COLLAPSIBLE}'!A{anchors[buyer]}",
+        c.hyperlink = Hyperlink(ref=c.coordinate, location=f"'{my_name}'!A{anchors[buyer]}",
                                 display=buyer, tooltip=f"Jump to {buyer}")
         c.font = Font(bold=True, size=10, color="0563C1", underline="single")
         c.alignment = LEFT
@@ -420,6 +428,12 @@ def build_collapsible(wb, buyers) -> None:
         f"G{first_idx}:G{tr}",
         CellIsRule(operator="equal", formula=['"OUTSTANDING"'], font=Font(bold=True, color="9C0006"),
                    fill=fill("FFC7CE")))
+
+    if field_filter:
+        # a one-column range = a single filter button on the label column, so the
+        # 13 lot headers do not sprout an arrow each; it stops above the index so
+        # filtering never hides the buyer jump table
+        ws.auto_filter.ref = f"A{hdr}:A{last_block_row}"
 
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
@@ -1482,24 +1496,93 @@ def lot_rows(src_ws):
             if src_ws[f"F{r}"].value not in (None, "")]
 
 
-def build_transposed(wb):
-    """A mirror image of 'Final Calculation Sheet': labels down, values across."""
+def build_transposed(wb, sheet_name=None, *, tab="808080", lot_groups=False,
+                     filter_mode="wide", note=""):
+    """A mirror image of 'Final Calculation Sheet': labels down, values across.
+
+    lot_groups   order the lot columns by auction then buyer and give every buyer
+                 and every auction its own fold button (column outline)
+    filter_mode  "wide"  = AutoFilter over the whole block (an arrow per column)
+                 "label" = AutoFilter on column A only, so there is ONE button
+                 None    = no filter buttons
+    """
     src_ws = wb[SRC]
     fields = transpose_labels(src_ws)
     rows = lot_rows(src_ws)
-    total_src = rows[-1] + 1                    # the source's own SUM row
-    ws = wb.create_sheet(TRANSPOSED, 1)
-    n = len(rows)
-    last_col = get_column_letter(2 + n)
+    total_src = rows[-1] + 1                     # the source's own SUM row
+    ws = wb.create_sheet(sheet_name or TRANSPOSED, 1)
 
-    ws.sheet_properties.tabColor = "808080"
+    # ---- column plan (sheet order) ---------------------------------------- #
+    plan, buyer_spans, auction_spans = [], [], []
+    if lot_groups:
+        ordered = sorted(rows, key=lambda r: (src_ws[f"D{r}"].value,
+                                              str(src_ws[f"G{r}"].value).strip(),
+                                              src_ws[f"F{r}"].value))
+        runs = []
+        for r in ordered:
+            key = (src_ws[f"D{r}"].value, str(src_ws[f"G{r}"].value).strip())
+            if runs and runs[-1][0] == key:
+                runs[-1][1].append(r)
+            else:
+                runs.append((key, [r]))
+        last_of_bid = {}
+        for i, ((bid, _b), _rs) in enumerate(runs):
+            last_of_bid[bid] = i
+        a_start = None
+        for i, ((bid, buyer), rs) in enumerate(runs):
+            if a_start is None:
+                a_start = len(plan)
+            first = len(plan)
+            for r in rs:
+                plan.append({"t": "lot", "srow": r, "bid": bid, "buyer": buyer})
+            buyer_spans.append((first, len(plan) - 1,
+                                f"{buyer}  ({len(rs)})" if len(rs) > 1 else buyer, buyer))
+            if i == len(runs) - 1:
+                auction_spans.append((a_start, len(plan) - 1, f"AUCTION {bid}", bid))
+            elif last_of_bid[bid] == i:            # last buyer of this auction
+                plan.append({"t": "sep", "level": 0})
+                auction_spans.append((a_start, len(plan) - 2, f"AUCTION {bid}", bid))
+                a_start = None
+            else:
+                plan.append({"t": "sep", "level": 1})
+    else:
+        for r in rows:
+            plan.append({"t": "lot", "srow": r, "bid": src_ws[f"D{r}"].value,
+                         "buyer": str(src_ws[f"G{r}"].value).strip()})
+    plan.append({"t": "total"})
+    for i, c in enumerate(plan):
+        c["letter"] = get_column_letter(2 + i)
+    last_col = plan[-1]["letter"]
+    lots = [c for c in plan if c["t"] == "lot"]
+
+    ws.sheet_properties.tabColor = tab
     ws.sheet_view.showGridLines = False
+    if lot_groups:
+        ws.sheet_properties.outlinePr.summaryBelow = False
+        ws.sheet_properties.outlinePr.summaryRight = True
     ws.sheet_format.outlineLevelRow = 0
-    ws.sheet_format.outlineLevelCol = 0
+    ws.sheet_format.outlineLevelCol = 2 if lot_groups else 0
     ws.column_dimensions["A"].width = 34
-    for i in range(n + 1):
-        ws.column_dimensions[get_column_letter(2 + i)].width = 14.5
+    for c in plan:
+        cd = ws.column_dimensions[c["letter"]]
+        cd.width = 2.6 if c["t"] == "sep" else 14.5
+        if c["t"] == "lot" and lot_groups:
+            cd.outlineLevel = 2
+        elif c["t"] == "sep":
+            cd.outlineLevel = c["level"]
 
+    # ---- colour maps ------------------------------------------------------- #
+    buyers_seen, auctions_seen = [], []
+    for c in lots:
+        if c["buyer"] not in buyers_seen:
+            buyers_seen.append(c["buyer"])
+        if c["bid"] not in auctions_seen:
+            auctions_seen.append(c["bid"])
+    buyer_accent = {b: THEMES[i % len(THEMES)][0] for i, b in enumerate(buyers_seen)}
+    buyer_tint = {b: THEMES[i % len(THEMES)][1] for i, b in enumerate(buyers_seen)}
+    auction_colour = {b: THEMES[i % len(THEMES)][0] for i, b in enumerate(auctions_seen)}
+
+    # ---- title + note ------------------------------------------------------ #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
     c.value = ("MSTC LIMITED  \u2022  FINAL CALCULATION SHEET, TRANSPOSED   "
@@ -1511,75 +1594,114 @@ def build_transposed(wb):
 
     ws.merge_cells(f"A2:{last_col}2")
     c = ws["A2"]
-    c.value = (f"HOW TO USE  \u25b6  a one-for-one copy of '{SRC}' turned on its side: the "
-               f"{len(fields)} field captions of row 3 run down column A in the same order, one column per "
-               f"lot, and the last column is the source's own total row (row {total_src})   \u2022   every cell "
-               "is a live link, so the two sheets can never disagree   \u2022   the header colour of a lot "
-               "column is its auction: " + "  \u2022  ".join(
-                   f"{b} = bid sheet {a}" for a, b in
-                   sorted({(src_ws[f'D{r}'].value, THEMES[i % len(THEMES)][0])
-                           for i, r in enumerate(rows)})) +
-               "   \u2022   filter with the \u25bc arrow on the FIELD column")
+    c.value = note or (
+        f"HOW TO USE  \u25b6  a one-for-one copy of '{SRC}' turned on its side: the "
+        f"{len(fields)} field captions of row 3 run down column A in the same order, one column per "
+        f"lot, and the last column is the source's own total row (row {total_src})   \u2022   every cell "
+        "is a live link, so the two sheets can never disagree   \u2022   the header colour of a lot "
+        "column is its auction: " + "  \u2022  ".join(
+            f"{colour} = bid sheet {bid}" for bid, colour in auction_colour.items()) +
+        "   \u2022   filter with the \u25bc arrow on the FIELD column")
     c.font = Font(size=9, italic=True, color="1F3864")
     c.fill = fill("FFF2CC")
     c.alignment = LEFTW
     ws.row_dimensions[2].height = 32
 
-    # header row: one column per lot + the source total column --------------- #
-    hdr = 3
+    # ---- bands (buyer / auction) + header row ------------------------------ #
+    r = 3
+    if lot_groups:
+        for band_row, spans, colour_map, height, size in (
+                (r, auction_spans, auction_colour, 16, 9),
+                (r + 1, buyer_spans, buyer_accent, 46, 8)):
+            for first, last, text, key in spans:
+                c1, c2 = plan[first]["letter"], plan[last]["letter"]
+                if c1 != c2:
+                    ws.merge_cells(f"{c1}{band_row}:{c2}{band_row}")
+                cc = ws[f"{c1}{band_row}"]
+                cc.value = text
+                cc.font = Font(bold=True, size=size, color="FFFFFF")
+                # wrap: a single-lot buyer has only one 14.5-wide column to fit in
+                cc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                for k in range(first, last + 1):
+                    x = ws[f"{plan[k]['letter']}{band_row}"]
+                    x.fill = fill(colour_map[key])
+                    x.border = BOX
+            lab = ws.cell(row=band_row, column=1,
+                          value="AUCTION  \u2192" if band_row == r else "BUYER  \u2192")
+            lab.font = Font(bold=True, size=9, color="FFFFFF")
+            lab.fill = fill("404040")
+            lab.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            ws.row_dimensions[band_row].height = height
+        r += 2
+    hdr = r
+
     c = ws.cell(row=hdr, column=1, value="FIELD (row 3 of the source)  \u25b8  |  LOT \u2192")
     c.font = Font(bold=True, size=10, color="FFFFFF")
     c.fill = fill("404040")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    auction_colour = {}
-    for i, srow in enumerate(rows):
-        bid = src_ws[f"D{srow}"].value
-        auction_colour.setdefault(bid, THEMES[len(auction_colour) % len(THEMES)][0])
-        cc = ws.cell(row=hdr, column=2 + i, value=src("F", srow))
-        cc.number_format = KIND_FMT["num0"]
-        cc.font = Font(bold=True, size=10, color="FFFFFF")
-        cc.fill = fill(auction_colour[bid])
-        cc.alignment = CENTER
-    cc = ws.cell(row=hdr, column=2 + n, value=f"TOTAL (src row {total_src})")
-    cc.font = Font(bold=True, size=10, color="FFFFFF")
-    cc.fill = fill("1F3864")
-    cc.alignment = CENTER
-    for col in range(1, 3 + n):
-        ws.cell(row=hdr, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    c.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    for cc in plan:
+        x = ws[f"{cc['letter']}{hdr}"]
+        if cc["t"] == "sep":
+            x.fill = fill("FFFFFF")
+            continue
+        if cc["t"] == "total":
+            x.value = f"TOTAL (src row {total_src})"
+            x.font = Font(bold=True, size=10, color="FFFFFF")
+            x.fill = fill("1F3864")
+            x.alignment = CENTER
+        else:
+            x.value = src("F", cc["srow"])
+            x.number_format = KIND_FMT["num0"]
+            x.font = Font(bold=True, size=10, color="FFFFFF")
+            x.fill = fill(auction_colour[cc["bid"]])
+            x.alignment = CENTER
+        x.border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
     ws.row_dimensions[hdr].height = 30
     ws.freeze_panes = f"B{hdr + 1}"
 
-    # one row per source field ------------------------------------------------ #
+    # ---- one row per source field ------------------------------------------ #
     r = hdr + 1
     for k, (scol, label) in enumerate(fields):
         a = ws.cell(row=r, column=1, value=label)
         a.font = Font(bold=True, size=10, color="1F3864")
         a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
         a.fill = fill("DDEBF7" if k % 2 else "F4F9FD")
+        a.border = BOX
         fmt = src_ws[f"{scol}{rows[0]}"].number_format or "General"
-        for i, srow in enumerate(rows):
-            cc = ws.cell(row=r, column=2 + i, value=src(scol, srow))
-            cc.number_format = fmt
-            cc.font = Font(size=10, color="333333")
-            cc.alignment = LEFT if fmt in ("General", "@") else RIGHT
-            if i % 2:
-                cc.fill = fill("F7F7F7")
-        t = ws.cell(row=r, column=2 + n, value=src(scol, total_src))
+        for i, cc in enumerate(lots):
+            x = ws[f"{cc['letter']}{r}"]
+            x.value = src(scol, cc["srow"])
+            x.number_format = fmt
+            x.font = Font(size=10, color="333333")
+            x.alignment = LEFT if fmt in ("General", "@") else RIGHT
+            if lot_groups:
+                x.fill = fill(buyer_tint[cc["buyer"]]) if i % 2 == 0 else fill("F7F7F7")
+            elif i % 2:
+                x.fill = fill("F7F7F7")
+            x.border = BOX
+        t = ws[f"{plan[-1]['letter']}{r}"]
+        t.value = src(scol, total_src)
         t.number_format = fmt
         t.font = Font(bold=True, size=10, color="1F3864")
         t.alignment = LEFT if fmt in ("General", "@") else RIGHT
         t.fill = fill("DDEBF7")
-        for col in range(1, 3 + n):
-            ws.cell(row=r, column=col).border = BOX
-        ws.cell(row=r, column=2 + n).border = Border(
-            left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+        t.border = Border(left=Side(style="thin", color="1F4E79"), right=THIN,
+                          top=THIN, bottom=THIN)
         ws.row_dimensions[r].height = 15
         r += 1
+    last_row = r - 1
 
-    ws.auto_filter.ref = f"A{hdr}:{last_col}{r - 1}"
+    if filter_mode == "wide":
+        ws.auto_filter.ref = f"A{hdr}:{last_col}{last_row}"
+    elif filter_mode == "label":
+        # a one-column range = a single filter button on the label column, so the
+        # lot headers do not sprout an arrow each
+        ws.auto_filter.ref = f"A{hdr}:A{last_row}"
+
     out_row = hdr + 1 + [lbl for _l, lbl in fields].index("Outstanding")
     ws.conditional_formatting.add(
-        f"B{out_row}:{get_column_letter(1 + n)}{out_row}",
+        f"{lots[0]['letter']}{out_row}:{lots[-1]['letter']}{out_row}",
         CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
                    fill=fill("FFC7CE")))
 
@@ -1590,7 +1712,6 @@ def build_transposed(wb):
     ws.print_title_cols = "A:A"
 
 
-
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -1599,14 +1720,34 @@ def main(path: str) -> None:
         if name in wb.sheetnames:
             del wb[name]
     buyers = read_lots(wb[SRC])
+    # every build inserts at index 1, so build in reverse workbook order
+    build_ledger_cols(wb, buyers)
+    build_ledger(wb, buyers)
+    build_collapsible_rows(wb, buyers)
+    build_collapsible(wb, buyers, sheet_name=C_FIELD_FILTER, field_filter=True,
+                      tab="F4B183")
+    build_collapsible(wb, buyers)
     build_lot_vertical(wb, buyers)
     build_buyer_pivot(wb, buyers)
-    build_transposed(wb)                   # built last, inserted at index 1 -> first view
-    build_collapsible(wb, buyers)
-    build_collapsible_rows(wb, buyers)
-    build_ledger(wb, buyers)
-    build_ledger_cols(wb, buyers)
-    wb.active = wb.sheetnames.index(TRANSPOSED)
+    # --- the four filter layouts, one sheet each (nothing existing is changed) -- #
+    build_transposed(wb, T_BOTH, tab="255E91", lot_groups=True, filter_mode="label",
+                     note="HOW TO USE  \u25b6  both at once: the \u25bc on the FIELD label cell (A5) filters "
+                          "which rows show, and the \u2212 above the thin / wide dividers fold a buyer's or a "
+                          "whole auction's lot columns away.")
+    build_transposed(wb, T_LOT_FOLDS, tab="4472C4", lot_groups=True, filter_mode=None,
+                     note="HOW TO USE  \u25b6  the lot columns are sorted by auction then buyer and grouped: "
+                          "the \u2212 above a thin divider folds that BUYER's lots away, the \u2212 above a wide "
+                          "divider folds a whole AUCTION.  The 1 / 2 buttons in the outline area collapse every "
+                          "buyer or every auction at once.  No filter arrows here - this sheet is for folding.")
+    build_transposed(wb, T_FIELD_FILTER, tab="7F7F7F", filter_mode="label",
+                     note="HOW TO USE  \u25b6  ONE filter button, on the FIELD label cell at the top of column "
+                          "A: click it and tick the fields you want to see - every other row hides.  The lot "
+                          "headers carry no arrows.  Otherwise identical to 'Final Calc (Transposed)'.")
+    build_transposed(wb)
+    # the builders insert at different places, so put the tabs in ALL_VIEWS order
+    for i, name in enumerate([SRC] + list(ALL_VIEWS)):
+        wb.move_sheet(name, offset=i - wb.sheetnames.index(name))
+    wb.active = wb.sheetnames.index(T_FIELD_FILTER)   # opens on the new label filter
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.
