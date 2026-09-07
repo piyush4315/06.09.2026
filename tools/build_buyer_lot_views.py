@@ -174,7 +174,15 @@ LEFTW = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
 
 def fill(rgb: str) -> PatternFill:
-    return PatternFill("solid", fgColor=rgb)
+    """A solid fill, with BOTH colours set.
+
+    An ordinary cell fill takes its colour from fgColor, but a *differential*
+    fill - the kind conditional formatting carries - takes it from bgColor.
+    Setting only fgColor leaves every CF fill invisible in Excel, which shows
+    up as white-on-white text on the shaded rows.
+    """
+    rgb = rgb[-6:]
+    return PatternFill("solid", fgColor="FF" + rgb, bgColor="FF" + rgb)
 
 
 def src(col: str, row: int) -> str:
