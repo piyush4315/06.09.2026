@@ -1819,7 +1819,8 @@ def build_pick_buyer(wb, buyers) -> None:
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.merge_cells("B3:D3")
     sel = ws["B3"]
-    sel.value = names[0]
+    # open on the widest buyer so the sheet does not look half empty
+    sel.value = max(buyers, key=lambda b: len(buyers[b]))
     sel.font = Font(bold=True, size=12, color="1F3864")
     sel.fill = fill("FFE699")
     sel.alignment = CENTER
