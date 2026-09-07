@@ -31,6 +31,7 @@ from openpyxl.formatting.rule import (CellIsRule, ColorScaleRule, DataBarRule,
                                       FormulaRule)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.hyperlink import Hyperlink
 
 SRC = "Final Calculation Sheet"
@@ -46,9 +47,11 @@ T_FIELD_FILTER = "Transposed + Field Filter"     # one filter button on the labe
 T_LOT_FOLDS = "Transposed + Lot Folds"           # per buyer / per auction fold buttons
 T_BOTH = "Transposed + Both Filters"             # the two together
 C_FIELD_FILTER = "Collapsible + Field Filter"    # collapsible blocks + label filter
+T_PICK_BUYER = "Transposed - Pick a Buyer"       # choose a buyer, its lots fill the columns
+BUYER_ROWS = "Buyer Rows (Filter)"               # one row per buyer, filter the Buyer column
 # in workbook order: the sheet built LAST is the one that lands at index 1
-ALL_VIEWS = (TRANSPOSED, T_FIELD_FILTER, T_LOT_FOLDS, T_BOTH,
-             BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, C_FIELD_FILTER,
+ALL_VIEWS = (TRANSPOSED, T_FIELD_FILTER, T_LOT_FOLDS, T_BOTH, T_PICK_BUYER,
+             BUYER_PIVOT, BUYER_ROWS, LOT_VERTICAL, COLLAPSIBLE, C_FIELD_FILTER,
              COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
@@ -1230,6 +1233,8 @@ L_FP_EXP = "FP Expected (\u20b9)"
 L_FP_REC = "FP Received (\u20b9)"
 L_RECV = "Total Received (\u20b9)"
 L_RECEIV = "Total Receivables (\u20b9)"
+L_STATUS = "Payment Status"
+L_COLL = "Collection %"
 
 # (label, number format, per-buyer spec, total-column spec)
 PIVOT_SECTIONS = [
@@ -1280,6 +1285,35 @@ PIVOT_SECTIONS = [
         ("Collection %",             "0.0%",     "collection", "collection"),
     ]),
 ]
+
+
+def buyer_formula(b, spec):
+    """The formula body (no leading '=') for one buyer-driven figure.
+
+    `b` is the address of the cell holding the buyer name, so the same body works
+    whether buyers run across the columns or down the rows.
+    """
+    if spec == "lots":
+        return _countif(b)
+    if spec == "status":
+        return f'IF({_sumif(b, "AD")}<=0,"SETTLED","OUTSTANDING")'
+    if spec == "avg_rate":
+        return f'IFERROR({_sumif(b, "H")}/{_sumif(b, "A")},"")'
+    if spec == "inv_pending":
+        return _countblank(b, "AE")
+    if spec == "gst_tds_pct":
+        return f'IFERROR({_sumif(b, "R")}/{_sumif(b, "H")},"")'
+    if spec == "sd_out":
+        return f"{_sumif(b, 'T')}-{_sumif(b, 'U')}"
+    if spec == "fp_out":
+        return f"{_sumif(b, 'W')}-{_sumif(b, 'X')}"
+    if spec == "collection":
+        return f'IFERROR({_sumif(b, "AC")}/{_sumif(b, "S")},"")'
+    if spec == "inv_raised":
+        return f"{_countif(b)}-{_countblank(b, 'AE')}"
+    if spec == "sap_posted":
+        return f"{_countif(b)}-{_countblank(b, 'AF')}"
+    return _sumif(b, spec)
 
 
 def build_buyer_pivot(wb, buyers):
@@ -1712,6 +1746,359 @@ def build_transposed(wb, sheet_name=None, *, tab="808080", lot_groups=False,
     ws.print_title_cols = "A:A"
 
 
+# --------------------------------------------------------------------------- #
+# transposed sheet whose lot columns follow a buyer picked from a dropdown
+# --------------------------------------------------------------------------- #
+ADDITIVE_SRC_COLS = {"A", "H", "I", "J", "K", "L", "M", "N", "O", "P", "R", "S",
+                     "T", "U", "W", "X", "Z", "AA", "AC", "AD"}
+
+
+def build_pick_buyer(wb, buyers) -> None:
+    """Labels down the rows, one column per lot *of the buyer picked in B3*.
+
+    Excel filters can only hide rows, so "show me one buyer's lots" is done with
+    a dropdown plus INDEX/MATCH instead: a hidden helper column numbers each lot
+    of the chosen buyer 1..n, and every lot column picks up the n-th one.
+    """
+    src_ws = wb[SRC]
+    fields = transpose_labels(src_ws)
+    rows = lot_rows(src_ws)
+    first, last = rows[0], rows[-1]
+    names = list(buyers)
+    nb, width = len(names), max(len(v) for v in buyers.values())
+    ws = wb.create_sheet(T_PICK_BUYER)
+    total_idx = 2 + width                       # A + width lot columns -> total
+    last_col = get_column_letter(total_idx)
+    helper = total_idx + 2                      # hidden block: rank / row / list
+    h_rank = get_column_letter(helper)
+    h_row = get_column_letter(helper + 2)
+    h_list = get_column_letter(helper + 4)
+
+    ws.sheet_properties.tabColor = "203864"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_format.outlineLevelRow = 0
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 34
+    for i in range(width):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 14.5
+    ws.column_dimensions[last_col].width = 17
+    for L in (h_rank, get_column_letter(helper + 1), h_row,
+              get_column_letter(helper + 3), h_list):
+        ws.column_dimensions[L].width = 12
+        ws.column_dimensions[L].hidden = True
+
+    # ---- title ------------------------------------------------------------ #
+    ws.merge_cells(f"A1:{last_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  TRANSPOSED, FILTERED BY BUYER   (pick a buyer "
+               "\u2192 only its lots are shown)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  click the blue cell B3 and pick a buyer from the list - the lot "
+               f"columns immediately re-point at that buyer's lots (up to {width}, the widest buyer here) "
+               "and every figure follows   \u2022   the \u25bc on the FIELD column still filters which "
+               "rows show   \u2022   nothing is typed in: each cell is an INDEX / MATCH into "
+               f"'{SRC}', so the two can never disagree   \u2022   columns "
+               f"{h_rank}, {h_row} and {h_list} are hidden helpers - the buyer list in {h_list} is "
+               "rewritten whenever this sheet is rebuilt")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 44
+
+    # ---- the buyer picker (row 3) ------------------------------------------ #
+    c = ws["A3"]
+    c.value = "PICK A BUYER  \u25b8"
+    c.font = Font(bold=True, size=11, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.merge_cells("B3:D3")
+    sel = ws["B3"]
+    sel.value = names[0]
+    sel.font = Font(bold=True, size=12, color="1F3864")
+    sel.fill = fill("FFE699")
+    sel.alignment = CENTER
+    for L in ("B", "C", "D"):
+        ws[f"{L}3"].border = Border(left=MED, right=MED, top=MED, bottom=MED)
+    dv = DataValidation(type="list", formula1=f"${h_list}$4:${h_list}${3 + nb}",
+                        allow_blank=False, showDropDown=False)
+    dv.prompt = "Pick a buyer"
+    dv.promptTitle = "Buyer"
+    ws.add_data_validation(dv)
+    dv.add(sel)
+    ws.merge_cells(f"E3:{last_col}3")
+    st = ws["E3"]
+    grng = f"'{SRC}'!$G${first}:$G${last}"
+    st.value = ('=IF($B$3="","\u25c0 pick a buyer in B3","showing "&COUNT($B$4:'
+                f'${get_column_letter(1 + width)}$4)&" lot(s) of "&'
+                f'COUNTIF({grng},$B$3)&" for "&$B$3)')
+    st.font = Font(bold=True, size=10, color="1F3864")
+    st.fill = fill("DDEBF7")
+    st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[3].height = 26
+
+    # ---- hidden helpers ---------------------------------------------------- #
+    blank = '""'                      # an empty string, for inside a formula
+    for sr in range(first, last + 1):
+        ws[f"{h_rank}{sr}"] = (f"=IF('{SRC}'!$G{sr}=$B$3,"
+                               f"COUNTIF('{SRC}'!$G${first}:$G{sr},$B$3),{blank})")
+    ws[f"{h_rank}3"] = "rank of each source lot row inside the chosen buyer"
+    for i in range(1, width + 1):
+        ws[f"{h_row}{3 + i}"] = (f"=IFERROR(MATCH({i},${h_rank}${first}:${h_rank}${last},0)"
+                                 f"+{first - 1},{blank})")
+    ws[f"{h_row}2"] = "source row of each lot column"
+    for i, name in enumerate(names):
+        ws[f"{h_list}{4 + i}"] = name
+    ws[f"{h_list}3"] = "buyer list for the B3 dropdown"
+    for L in (h_rank, h_row, h_list):
+        ws[f"{L}3"].font = Font(size=8, italic=True, color="808080")
+    ws[f"{h_row}2"].font = Font(size=8, italic=True, color="808080")
+
+    # ---- header row -------------------------------------------------------- #
+    hdr = 4
+    c = ws.cell(row=hdr, column=1, value="FIELD (row 3 of the source)  \u25b8  |  LOT \u2192")
+    c.font = Font(bold=True, size=10, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for i in range(width):
+        L = get_column_letter(2 + i)
+        x = ws.cell(row=hdr, column=2 + i,
+                    value=(f"=IFERROR(INDEX('{SRC}'!$F${first}:$F${last},"
+                           f"${h_row}{4 + i}-{first - 1}),{blank})"))
+        x.number_format = KIND_FMT["num0"]
+        x.font = Font(bold=True, size=10, color="FFFFFF")
+        x.fill = fill(THEMES[i % len(THEMES)][0])
+        x.alignment = CENTER
+    t = ws.cell(row=hdr, column=total_idx, value='="TOTAL  "&$B$3')
+    t.font = Font(bold=True, size=10, color="FFFFFF")
+    t.fill = fill("1F3864")
+    t.alignment = CENTER
+    for col in range(1, total_idx + 1):
+        ws.cell(row=hdr, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 30
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # ---- one row per source field ------------------------------------------ #
+    r = hdr + 1
+    for k, (scol, label) in enumerate(fields):
+        a = ws.cell(row=r, column=1, value=label)
+        a.font = Font(bold=True, size=10, color="1F3864")
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        a.fill = fill("DDEBF7" if k % 2 else "F4F9FD")
+        fmt = src_ws[f"{scol}{first}"].number_format or "General"
+        for i in range(width):
+            L = get_column_letter(2 + i)
+            idx = f"${h_row}{4 + i}-{first - 1}"
+            rng = f"'{SRC}'!${scol}${first}:${scol}${last}"
+            x = ws[f"{L}{r}"]
+            x.value = (f'=IFERROR(IF(INDEX({rng},{idx})="","",INDEX({rng},{idx})),"")')
+            x.number_format = fmt
+            x.font = Font(size=10, color="333333")
+            x.alignment = LEFT if fmt in ("General", "@") else RIGHT
+            if i % 2:
+                x.fill = fill("F7F7F7")
+        tt = ws.cell(row=r, column=total_idx)
+        if scol in ADDITIVE_SRC_COLS:
+            tt.value = (f"=IF(COUNT({get_column_letter(2)}{r}:"
+                        f"{get_column_letter(1 + width)}{r})=0,{blank},"
+                        f"SUM({get_column_letter(2)}{r}:{get_column_letter(1 + width)}{r}))")
+            tt.number_format = fmt
+        else:
+            tt.value = "\u2013"
+            tt.number_format = "General"
+        tt.font = Font(bold=True, size=10, color="1F3864")
+        tt.alignment = LEFT if fmt in ("General", "@") else RIGHT
+        tt.fill = fill("DDEBF7")
+        for col in range(1, total_idx + 1):
+            ws.cell(row=r, column=col).border = BOX
+        ws.cell(row=r, column=total_idx).border = Border(
+            left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+        ws.row_dimensions[r].height = 15
+        r += 1
+    last_row = r - 1
+
+    ws.auto_filter.ref = f"A{hdr}:A{last_row}"
+    out_row = hdr + 1 + [lbl for _l, lbl in fields].index("Outstanding")
+    ws.conditional_formatting.add(
+        f"{get_column_letter(2)}{out_row}:{get_column_letter(1 + width)}{out_row}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                   fill=fill("FFC7CE")))
+    ws.conditional_formatting.add(
+        f"{get_column_letter(2)}{out_row}:{get_column_letter(1 + width)}{out_row}",
+        CellIsRule(operator="lessThanOrEqual", formula=["0"], font=Font(color="006100")))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_cols = "A:A"
+
+
+# --------------------------------------------------------------------------- #
+# one row per buyer, every detail across - filter the Buyer column
+# --------------------------------------------------------------------------- #
+def build_buyer_rows(wb, buyers) -> None:
+    names = list(buyers)
+    nb = len(names)
+    fields = [(label, fmt, spec, tspec)
+              for _s, _c, fl in PIVOT_SECTIONS for (label, fmt, spec, tspec) in fl]
+    nf = len(fields)
+    ws = wb.create_sheet(BUYER_ROWS)
+    last_col = get_column_letter(1 + nf)
+    col_of = {label: get_column_letter(2 + i) for i, (label, _f, _s, _t) in enumerate(fields)}
+
+    ws.sheet_properties.tabColor = "9E480E"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    ws.sheet_format.outlineLevelRow = 0
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 34
+    for i in range(nf):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 13.5
+
+    ws.merge_cells(f"A1:{last_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  BUYER LIST   (one row per buyer  |  every detail "
+               "\u2192 columns)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  one row per buyer - click the \u25bc on the BUYER column and tick "
+               "the buyers you want; every other row hides   \u2022   every other column has its own "
+               "\u25bc too, so you can also filter on Payment Status, Outstanding, Collection % ...   "
+               "\u2022   the \u2211 TOTAL row uses SUBTOTAL, so it adds up only the buyers the filter "
+               f"leaves visible   \u2022   every figure is a live SUMIF / COUNTIF against '{SRC}' "
+               "driven by the buyer name in column A - rename a cell and its whole row follows")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 40
+
+    # ---- section band + header --------------------------------------------- #
+    band, hdr = 3, 4
+    col = 2
+    for sname, colour, fl in PIVOT_SECTIONS:
+        c1 = get_column_letter(col)
+        c2 = get_column_letter(col + len(fl) - 1)
+        if c1 != c2:
+            ws.merge_cells(f"{c1}{band}:{c2}{band}")
+        x = ws[f"{c1}{band}"]
+        x.value = sname
+        x.font = Font(bold=True, size=9, color="FFFFFF")
+        x.alignment = CENTER
+        for k in range(len(fl)):
+            cc = ws.cell(row=band, column=col + k)
+            cc.fill = fill(colour)
+            cc.border = BOX
+        col += len(fl)
+    lab = ws.cell(row=band, column=1, value="DETAIL BAND  \u2192")
+    lab.font = Font(bold=True, size=9, color="FFFFFF")
+    lab.fill = fill("404040")
+    lab.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[band].height = 16
+
+    c = ws.cell(row=hdr, column=1, value="BUYER  \u25b8  |  FIELD \u2192")
+    c.font = Font(bold=True, size=10, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for i, (label, _f, _s, _t) in enumerate(fields):
+        cc = ws.cell(row=hdr, column=2 + i, value=label)
+        cc.font = Font(bold=True, size=9, color="FFFFFF")
+        cc.fill = fill("595959")
+        cc.alignment = Alignment(horizontal="center", vertical="bottom", wrap_text=True,
+                                 textRotation=90)
+    for col_i in range(1, 2 + nf):
+        ws.cell(row=hdr, column=col_i).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 108
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # ---- one row per buyer -------------------------------------------------- #
+    first_row = hdr + 1
+    for bi, buyer in enumerate(names):
+        rr = first_row + bi
+        accent, tint, pale = THEMES[bi % len(THEMES)]
+        a = ws.cell(row=rr, column=1, value=buyer)
+        a.font = Font(bold=True, size=10, color=accent)
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        for label, fmt, spec, _t in fields:
+            cc = ws[f"{col_of[label]}{rr}"]
+            cc.value = f"={buyer_formula(f'$A{rr}', spec)}"
+            cc.number_format = fmt
+            cc.font = Font(size=10, bold=(spec == "status"))
+            cc.alignment = LEFT if fmt == "@" else RIGHT
+        for col_i in range(1, 2 + nf):
+            cc = ws.cell(row=rr, column=col_i)
+            cc.fill = fill(pale if bi % 2 else tint)
+            cc.border = BOX
+        ws.row_dimensions[rr].height = 16
+    last_buyer_row = first_row + nb - 1
+
+    # ---- filter-aware total row -------------------------------------------- #
+    tr = last_buyer_row + 1
+    a = ws.cell(row=tr, column=1, value="\u2211  TOTAL \u2014 visible buyers")
+    a.font = Font(bold=True, size=10, color="FFFFFF")
+    a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for label, fmt, _spec, tspec in fields:
+        L = col_of[label]
+        cc = ws[f"{L}{tr}"]
+        if tspec == "sum":
+            cc.value = f"=SUBTOTAL(109,{L}{first_row}:{L}{last_buyer_row})"
+        elif tspec == "status":
+            cc.value = f'=IF({col_of[L_OUT]}{tr}<=0,"SETTLED","OUTSTANDING")'
+        elif tspec == "avg_rate":
+            cc.value = f'=IFERROR({col_of[L_MAT]}{tr}/{col_of[L_QTY]}{tr},"")'
+        elif tspec == "gst_tds_pct":
+            cc.value = f'=IFERROR({col_of[L_GST_TDS]}{tr}/{col_of[L_MAT]}{tr},"")'
+        elif tspec == "sd_out":
+            cc.value = f"={col_of[L_SD_EXP]}{tr}-{col_of[L_SD_REC]}{tr}"
+        elif tspec == "fp_out":
+            cc.value = f"={col_of[L_FP_EXP]}{tr}-{col_of[L_FP_REC]}{tr}"
+        elif tspec == "collection":
+            cc.value = f'=IFERROR({col_of[L_RECV]}{tr}/{col_of[L_RECEIV]}{tr},"")'
+        cc.number_format = fmt
+        cc.font = Font(bold=True, size=10, color="FFFFFF")
+        cc.alignment = LEFT if fmt == "@" else RIGHT
+    for col_i in range(1, 2 + nf):
+        cc = ws.cell(row=tr, column=col_i)
+        cc.fill = fill("1F3864")
+        cc.border = BOX
+    ws.row_dimensions[tr].height = 18
+
+    # the filter covers the buyer rows only, so the total row is never hidden
+    ws.auto_filter.ref = f"A{hdr}:{last_col}{last_buyer_row}"
+
+    for rule in (CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                            fill=fill("FFC7CE")),
+                 CellIsRule(operator="lessThanOrEqual", formula=["0"], font=Font(color="006100"))):
+        ws.conditional_formatting.add(
+            f"{col_of[L_OUT]}{first_row}:{col_of[L_OUT]}{tr}", rule)
+    for text, fnt, bg in (("SETTLED", Font(bold=True, color="006100"), "C6EFCE"),
+                          ("OUTSTANDING", Font(bold=True, color="9C0006"), "FFC7CE")):
+        ws.conditional_formatting.add(
+            f"{col_of[L_STATUS]}{first_row}:{col_of[L_STATUS]}{tr}",
+            CellIsRule(operator="equal", formula=[f'"{text}"'], font=fnt, fill=fill(bg)))
+    ws.conditional_formatting.add(
+        f"{col_of[L_COLL]}{first_row}:{col_of[L_COLL]}{tr}",
+        ColorScaleRule(start_type="num", start_value=0, start_color="F8696B",
+                       mid_type="num", mid_value=0.9, mid_color="FFEB84",
+                       end_type="num", end_value=1, end_color="63BE7B"))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_cols = "A:A"
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -1720,7 +2107,8 @@ def main(path: str) -> None:
         if name in wb.sheetnames:
             del wb[name]
     buyers = read_lots(wb[SRC])
-    # every build inserts at index 1, so build in reverse workbook order
+    build_pick_buyer(wb, buyers)
+    build_buyer_rows(wb, buyers)
     build_ledger_cols(wb, buyers)
     build_ledger(wb, buyers)
     build_collapsible_rows(wb, buyers)
@@ -1747,7 +2135,7 @@ def main(path: str) -> None:
     # the builders insert at different places, so put the tabs in ALL_VIEWS order
     for i, name in enumerate([SRC] + list(ALL_VIEWS)):
         wb.move_sheet(name, offset=i - wb.sheetnames.index(name))
-    wb.active = wb.sheetnames.index(TRANSPOSED)   # opens on the sheet the user asked for
+    wb.active = wb.sheetnames.index(T_PICK_BUYER)   # opens on the buyer picker
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.

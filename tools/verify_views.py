@@ -10,17 +10,20 @@ workbook is made where SUBTOTAL(109,..)->SUM(..) and SUBTOTAL(103,..)->COUNT(..)
     out at exactly 2x the true total, because the buyer rows partition the lots
 """
 import re
+import shutil
 import sys
 from collections import OrderedDict
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, "tools")
-from build_buyer_lot_views import (BUYER_PIVOT, C_FIELD_FILTER, COLLAPSIBLE,  # noqa: E402
-                                   COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS, LOT_VERTICAL,
-                                   PIVOT_SECTIONS, SECTIONS, SRC, T_BOTH, T_FIELD_FILTER,
-                                   T_LOT_FOLDS, TRANSPOSED, lot_rows, plan_fields,
-                                   read_lots, transpose_labels)
+from build_buyer_lot_views import (ADDITIVE_SRC_COLS, BUYER_PIVOT, BUYER_ROWS,  # noqa: E402
+                                   C_FIELD_FILTER, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER,
+                                   LEDGER_COLS, LOT_VERTICAL, PIVOT_SECTIONS, SECTIONS, SRC,
+                                   T_BOTH, T_FIELD_FILTER, T_LOT_FOLDS, T_PICK_BUYER,
+                                   TRANSPOSED, lot_rows, plan_fields, read_lots,
+                                   transpose_labels)
 
 import formulas  # noqa: E402
 
@@ -58,7 +61,7 @@ def main(path):
     tmp = "/tmp/verify_subtotal.xlsx"
     wb2 = openpyxl.load_workbook(path)
     n_sub = 0
-    for name in (COLLAPSIBLE, LEDGER):
+    for name in (COLLAPSIBLE, LEDGER, BUYER_ROWS):
         for row in wb2[name].iter_rows():
             for c in row:
                 if isinstance(c.value, str) and c.value.startswith("=SUBTOTAL("):
@@ -452,6 +455,96 @@ def main(path):
         fails.append(f"{BUYER_PIVOT}: only {seen} of "
                      f"{sum(len(f) for _n, _c, f in PIVOT_SECTIONS)} detail rows found")
 
+
+    # ================= BUYER ROWS (FILTER) ================================= #
+    ws = wb[BUYER_ROWS]
+    bhdr = 4
+    col_of = {}
+    for c in ws[bhdr]:
+        if c.column >= 2 and isinstance(c.value, str) and c.value.strip():
+            col_of[c.value.strip()] = c.column_letter
+    row_of_buyer = {}
+    for r in range(bhdr + 1, ws.max_row + 1):
+        v = ws[f"A{r}"].value
+        if isinstance(v, str) and v in buyers:
+            row_of_buyer[v] = r
+    total_row = max(row_of_buyer.values()) + 1 if row_of_buyer else None
+    print(f"buyer rows: {len(row_of_buyer)} buyers, {len(col_of)} detail columns, "
+          f"total row {total_row}")
+    checks += 3
+    if len(row_of_buyer) != len(buyers):
+        fails.append(f"{BUYER_ROWS}: {len(row_of_buyer)} buyer rows, expected {len(buyers)}")
+    if len(col_of) != sum(len(f) for _n, _c, f in PIVOT_SECTIONS):
+        fails.append(f"{BUYER_ROWS}: {len(col_of)} detail columns")
+    if ws.auto_filter.ref != f"A{bhdr}:{get_column_letter(1 + len(col_of))}{total_row - 1}":
+        fails.append(f"{BUYER_ROWS}: autofilter {ws.auto_filter.ref}, expected the buyer "
+                     f"rows only (A{bhdr}:..{total_row - 1}) so the total row is never hidden")
+    for _sname, _c, fl in PIVOT_SECTIONS:
+        for label, _fmt, spec, _t in fl:
+            if label not in col_of:
+                fails.append(f"{BUYER_ROWS}: column '{label}' missing")
+                continue
+            L = col_of[label]
+            for buyer, rr in row_of_buyer.items():
+                eq(f"{BUYER_ROWS}!{L}{rr} [{buyer}/{label}]",
+                   V(BUYER_ROWS, f"{L}{rr}"), agg(spec, buyers[buyer]))
+            eq(f"{BUYER_ROWS}!{L}{total_row} [TOTAL/{label}]",
+               V(BUYER_ROWS, f"{L}{total_row}"), agg(spec, all_rows))
+
+    # ================= TRANSPOSED - PICK A BUYER =========================== #
+    # the lot columns follow B3, so each buyer needs its own recalculation
+    ws = wb[T_PICK_BUYER]
+    src_ws = wb[SRC]
+    fields8 = transpose_labels(src_ws)
+    srows8 = lot_rows(src_ws)
+    width = max(len(v) for v in buyers.values())
+    prow_of = {}
+    for r in range(5, ws.max_row + 1):
+        v = ws[f"A{r}"].value
+        if isinstance(v, str) and v.strip():
+            prow_of[v.strip()] = r
+    one_lot = min((b for b, v in buyers.items() if len(v) == 1), key=str)
+    two_lot = min((b for b, v in buyers.items() if len(v) == 2), key=str)
+    widest = max(buyers, key=lambda b: len(buyers[b]))
+    for buyer in (widest, two_lot, one_lot):
+        tmp = f"/tmp/verify_pick_{len(buyer)}.xlsx"
+        shutil.copy(path, tmp)
+        wb3 = openpyxl.load_workbook(tmp)
+        wb3[T_PICK_BUYER]["B3"] = buyer
+        wb3.save(tmp)
+        vals3 = calculate(tmp)
+        rows_b = buyers[buyer]
+
+        def V3(addr, _v=vals3):
+            return _v.get((T_PICK_BUYER.upper(), addr))
+        print(f"pick a buyer = {buyer!r}: {len(rows_b)} lot(s) expected")
+        for i in range(width):
+            L = get_column_letter(2 + i)
+            want = truth("F", rows_b[i]) if i < len(rows_b) else ""
+            eq(f"{T_PICK_BUYER}!{L}4 [lot {i + 1} of {buyer}]", V3(f"{L}4"),
+               "" if want is None else want)
+        for scol, label in fields8:
+            rr = prow_of.get(label)
+            if rr is None:
+                fails.append(f"{T_PICK_BUYER}: field row '{label}' missing")
+                continue
+            for i in range(width):
+                L = get_column_letter(2 + i)
+                t = truth(scol, rows_b[i]) if i < len(rows_b) else ""
+                eq(f"{T_PICK_BUYER}!{L}{rr} [{buyer}/{label}/lot {i + 1}]",
+                   V3(f"{L}{rr}"), "" if t is None else t)
+            tot = get_column_letter(2 + width)
+            if scol in ADDITIVE_SRC_COLS:
+                # the total stays blank when every lot of this buyer is blank
+                vals_row = [truth(scol, x) for x in rows_b]
+                want = "" if all(v is None for v in vals_row) else \
+                    sum(num(v) for v in vals_row)
+                eq(f"{T_PICK_BUYER}!{tot}{rr} [{buyer}/{label}/TOTAL]", V3(f"{tot}{rr}"), want)
+            else:
+                eq(f"{T_PICK_BUYER}!{tot}{rr} [{buyer}/{label}/TOTAL]", V3(f"{tot}{rr}"),
+                   "\u2013")
+        eq(f"{T_PICK_BUYER}!E3 [{buyer}/status line]", V3("E3"),
+           f"showing {len(rows_b)} lot(s) of {len(rows_b)} for {buyer}")
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
     # four sheets share this layout; the folded ones simply reorder the columns
