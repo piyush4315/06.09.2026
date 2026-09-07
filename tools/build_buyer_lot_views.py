@@ -2378,7 +2378,12 @@ def build_live_search(wb, buyers) -> None:
     h_hay = get_column_letter(h)
     h_hit = get_column_letter(h + 2)
     h_list = get_column_letter(h + 4)
-    h_term = get_column_letter(h + 6)               # the search box split on commas
+    h_norm = get_column_letter(h + 6)               # the box, delimiters normalised
+    h_term0 = h + 7                                 # one hidden column per search term
+    R_TRM, P_TRM, T_TRM, S_TRM, C_TRM, G_TRM = 4, 5, 6, 7, 8, 9   # rows of the term block
+
+    def term_col(j):
+        return get_column_letter(h_term0 + j)
 
     def cell(col, r):
         return f"'{SRC}'!${col}${r}"
@@ -2393,7 +2398,7 @@ def build_live_search(wb, buyers) -> None:
     widths[status_col] = 13
     for L, w in widths.items():
         ws.column_dimensions[L].width = w
-    for k in range(h, h + 7):
+    for k in range(h, h_term0 + MAX_TERMS):
         L = get_column_letter(k)
         ws.column_dimensions[L].width = 12
         ws.column_dimensions[L].hidden = True
@@ -2401,8 +2406,8 @@ def build_live_search(wb, buyers) -> None:
     # ---- title + how-to ---------------------------------------------------- #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (type a lot no. or a buyer, several at once "
-               "with commas - the lots that do not match fade to grey)")
+    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (comma or / = ANY of the values,   + or & = ALL "
+               "of them - the lots that do not match fade to grey)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2411,15 +2416,19 @@ def build_live_search(wb, buyers) -> None:
     ws.merge_cells(f"A2:{last_col}2")
     c = ws["A2"]
     c.value = ("HOW TO USE  \u25b6  click the yellow box B3 and type - a lot number (1874), part of one "
-               "(187), a buyer (NATIONAL), part of a buyer name, a lot name (COPPER) - and several at "
-               "once, separated by commas:   1874, 1923, OMKAR   lights up every lot matching ANY of "
-               "them (up to 8 terms, empty ones ignored, spaces around a comma are fine).  Every lot keeps "
+               "(187), a buyer (NATIONAL), part of a buyer name, a lot name (COPPER).   \u2022   WILDCARD / "
+               "MATCH ANY - separate values with a comma or a slash:   1874, 1923, OMKAR   or   1874 / 1923 "
+               "   - and every lot containing ANY of them lights up.   \u2022   FACETED / FILTERED - "
+               "separate them with + or &:   NATIONAL + COPPER   - and a lot lights up only if it matches "
+               "EVERY facet.   \u2022   the two mix:   OMKAR, STERLING + COPPER   = (OMKAR or STERLING) and "
+               "COPPER.   Up to 8 values, empty ones ignored, spaces around a separator are fine.  "
+               "Every lot keeps "
                "its own row: the ones that match stay bright and turn green, the rest fade to grey.  "
                "Clear the box and all 37 come back to normal.   \u2022   cell F3 narrows what the text is "
                "looked for in (lot no. + buyer + name by default).   \u2022   matching is 'contains', "
                "not case sensitive.   \u2022   nothing here is typed in: every figure is a live link to "
                f"'{SRC}', and the \u2211 row totals only the matching lots.   \u2022   columns "
-               f"{h_hay}..{h_term} are hidden helpers.")
+               f"{h_hay}..{term_col(MAX_TERMS - 1)} are hidden helpers.")
     c.font = Font(size=9, italic=True, color="1F3864")
     c.fill = fill("FFF2CC")
     c.alignment = LEFTW
@@ -2468,7 +2477,7 @@ def build_live_search(wb, buyers) -> None:
     ws.merge_cells(f"I3:{last_col}3")
     st = ws["I3"]
     st.value = ('=IF($B$3="","\u25c0 type in the yellow box - a lot no., a buyer, a lot name... '
-                'several at once, separated by commas",'
+                'several values: comma or / = ANY of them,  + or & = ALL of them",'
                 '"matching "&SUM($' + h_hit + '$5:$' + h_hit + '$' + str(4 + n) + ')&" of ' + str(n) +
                 ' lots   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   the rest are '
                 'greyed out, not hidden")')
@@ -2477,10 +2486,35 @@ def build_live_search(wb, buyers) -> None:
     st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[3].height = 30
 
-    # ---- the search box split on commas (written once, read by every row) --- #
+    # ---- split the box into terms (written once, read by every row) -------- #
+    # ',' and '/' separate ALTERNATIVES: a lot holding any one of them passes
+    # that facet.  '+' and '&' start a NEW facet and every facet has to pass,
+    # so "OMKAR, STERLING + COPPER" = (OMKAR or STERLING) and COPPER.
+    # The block walks the text one delimiter at a time, so a term can be any
+    # length.  Rows: R what is left, P where the next delimiter is, T the term,
+    # S the delimiter after it, C the running facet no., G the term's facet.
+    ws[f"{h_norm}3"] = "the box with & -> + and / -> ,"
+    ws[f"{h_norm}{R_TRM}"] = '=SUBSTITUTE(SUBSTITUTE($B$3,"&","+"),"/",",")'
+    ws[f"{term_col(0)}3"] = (f"term 1 - rows {R_TRM}..{G_TRM}: text left, delimiter pos, the term, "
+                             "delimiter, running facet, facet no.")
     for j in range(MAX_TERMS):
-        ws[f"{h_term}{4 + j}"] = (
-            f'=TRIM(MID(SUBSTITUTE($B$3,",",REPT(" ",100)),{j * 100 + 1},100))')
+        X = term_col(j)
+        prv = term_col(j - 1) if j else None
+        ws[f"{X}{R_TRM}"] = (f"=${h_norm}${R_TRM}" if j == 0 else
+                             f'=IF(OR(${prv}${R_TRM}="",${prv}${P_TRM}=99999),"",'
+                             f'MID(${prv}${R_TRM},${prv}${P_TRM}+1,99999))')
+        ws[f"{X}{P_TRM}"] = (f'=IF(${X}${R_TRM}="",99999,'
+                             f'MIN(IFERROR(FIND(",",${X}${R_TRM}),99999),'
+                             f'IFERROR(FIND("+",${X}${R_TRM}),99999)))')
+        ws[f"{X}{T_TRM}"] = (f'=IF(${X}${R_TRM}="","",IF(${X}${P_TRM}=99999,TRIM(${X}${R_TRM}),'
+                             f'TRIM(LEFT(${X}${R_TRM},${X}${P_TRM}-1))))')
+        ws[f"{X}{S_TRM}"] = (f'=IF(${X}${R_TRM}="","",IF(${X}${P_TRM}=99999,"",'
+                             f'MID(${X}${R_TRM},${X}${P_TRM},1)))')
+        ws[f"{X}{C_TRM}"] = (1 if j == 0 else
+                             f'=IF(${prv}${S_TRM}="+",${prv}${C_TRM}+1,${prv}${C_TRM})')
+        ws[f"{X}{G_TRM}"] = f'=IF(${X}${T_TRM}="",0,${X}${C_TRM})'
+    grp_rng = f"${term_col(0)}${G_TRM}:${term_col(MAX_TERMS - 1)}${G_TRM}"
+    trm_rng = f"${term_col(0)}${T_TRM}:${term_col(MAX_TERMS - 1)}${T_TRM}"
 
     # ---- header row -------------------------------------------------------- #
     hdr = 4
@@ -2519,10 +2553,11 @@ def build_live_search(wb, buyers) -> None:
             f'IF($F$3="Bid Sheet",{cell("D", srow)},'
             f'IF($F$3="Unit",{cell("E", srow)},'
             f'{cell("F", srow)}&" "&{cell("G", srow)}&" "&{cell("B", srow)})))))')
-        hits = ",".join(
-            f'AND(${h_term}${4 + j}<>"",ISNUMBER(SEARCH(${h_term}${4 + j},${h_hay}{rr})))'
-            for j in range(MAX_TERMS))
-        ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(OR({hits}),1,0))'
+        facets = ",".join(
+            f'IF(COUNTIF({grp_rng},{g})=0,TRUE,SUMPRODUCT(({grp_rng}={g})*({trm_rng}<>"")'
+            f'*ISNUMBER(SEARCH({trm_rng},${h_hay}{rr})))>0)'
+            for g in range(1, MAX_TERMS + 1))
+        ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(AND({facets}),1,0))'
         for col in range(1, ncol + 1):
             cc = ws.cell(row=rr, column=col)
             cc.border = BOX
@@ -2591,7 +2626,7 @@ def build_live_search(wb, buyers) -> None:
         ws[f"{h_list}{4 + i}"] = t
     for L, txt in ((h_hay, "the text this lot is searched in"),
                    (h_hit, "1 = this lot matches the search box"),
-                   (h_term, f"the box split on commas (up to {MAX_TERMS} terms)"),
+                   (h_norm, ""),
                    (h_list, "")):
         ws[f"{L}3"] = txt or ws[f"{L}3"].value
         ws[f"{L}3"].font = Font(size=8, italic=True, color="808080")

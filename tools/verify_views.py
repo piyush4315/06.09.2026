@@ -15,7 +15,7 @@ import sys
 from collections import OrderedDict
 
 import openpyxl
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (ADDITIVE_SRC_COLS, ALL_BUYERS, BUYER_PIVOT,  # noqa: E402
@@ -676,13 +676,16 @@ def main(path):
     n10 = len(srows10)
     heads10 = ["#"] + [label_of10[c] for c in SEARCH_COLS] + ["Payment Status"]
     hit_col10 = None
+    norm_col10 = None
     term_col10 = None
     for c in ws[3]:
         if isinstance(c.value, str) and c.value.startswith("1 ="):
             hit_col10 = c.column_letter
-        if isinstance(c.value, str) and c.value.startswith("the box split on commas"):
+        if isinstance(c.value, str) and c.value.startswith("the box with &"):
+            norm_col10 = c.column_letter
+        if isinstance(c.value, str) and c.value.startswith("term 1 - rows"):
             term_col10 = c.column_letter
-    checks += 7 + MAX_TERMS + 3
+    checks += 7 + 6 * MAX_TERMS + 4
     if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
         fails.append(f"{LIVE_SEARCH}: header row is not {heads10[:4]}...")
     if ws["B3"].value not in (None, ""):
@@ -697,22 +700,40 @@ def main(path):
         fails.append(f"{LIVE_SEARCH}: freeze {ws.freeze_panes}, expected C5")
     if hit_col10 is None:
         fails.append(f"{LIVE_SEARCH}: no hidden match-flag column found")
-    if term_col10 is None:
-        fails.append(f"{LIVE_SEARCH}: no hidden comma-split column found")
+    if norm_col10 is None or term_col10 is None:
+        fails.append(f"{LIVE_SEARCH}: the hidden term-split block is missing "
+                     f"(normalised box {norm_col10!r}, terms {term_col10!r})")
     else:
+        if ws[f"{norm_col10}4"].value != '=SUBSTITUTE(SUBSTITUTE($B$3,"&","+"),"/",",")':
+            fails.append(f"{LIVE_SEARCH}!{norm_col10}4 [normalised box] is "
+                         f"{ws[f'{norm_col10}4'].value!r}")
+        c10 = column_index_from_string(term_col10)
         for j10 in range(MAX_TERMS):
-            exp10 = f'=TRIM(MID(SUBSTITUTE($B$3,",",REPT(" ",100)),{j10 * 100 + 1},100))'
-            got10 = ws[f"{term_col10}{4 + j10}"].value
-            if got10 != exp10:
-                fails.append(f"{LIVE_SEARCH}!{term_col10}{4 + j10} [term {j10 + 1}] is "
-                             f"{got10!r}, expected {exp10!r}")
+            X = get_column_letter(c10 + j10)
+            prv = get_column_letter(c10 + j10 - 1) if j10 else None
+            want = {
+                4: (f"=${norm_col10}$4" if j10 == 0 else
+                    f'=IF(OR(${prv}$4="",${prv}$5=99999),"",MID(${prv}$4,${prv}$5+1,99999))'),
+                5: (f'=IF(${X}$4="",99999,MIN(IFERROR(FIND(",",${X}$4),99999),'
+                    f'IFERROR(FIND("+",${X}$4),99999)))'),
+                6: (f'=IF(${X}$4="","",IF(${X}$5=99999,TRIM(${X}$4),'
+                    f'TRIM(LEFT(${X}$4,${X}$5-1))))'),
+                7: f'=IF(${X}$4="","",IF(${X}$5=99999,"",MID(${X}$4,${X}$5,1)))',
+                8: (1 if j10 == 0 else f'=IF(${prv}$7="+",${prv}$8+1,${prv}$8)'),
+                9: f'=IF(${X}$6="",0,${X}$8)',
+            }
+            for r10, exp10 in want.items():
+                got10 = ws[f"{X}{r10}"].value
+                if got10 != exp10:
+                    fails.append(f"{LIVE_SEARCH}!{X}{r10} [term {j10 + 1}] is "
+                                 f"{got10!r}, expected {exp10!r}")
     flag10 = str(ws[f"{hit_col10}5"].value or "")
-    if not flag10.startswith('=IF($B$3="",1,IF(OR('):
-        fails.append(f"{LIVE_SEARCH}: the match flag is not an OR over the comma terms "
-                     f"({flag10!r})")
-    if flag10.count("ISNUMBER(SEARCH(") != MAX_TERMS:
-        fails.append(f"{LIVE_SEARCH}: the match flag searches "
-                     f"{flag10.count('ISNUMBER(SEARCH(')} terms, expected {MAX_TERMS}")
+    if not flag10.startswith('=IF($B$3="",1,IF(AND('):
+        fails.append(f"{LIVE_SEARCH}: the match flag is not an AND over the facets "
+                     f"({flag10[:60]!r}...)")
+    if flag10.count("SUMPRODUCT(") != MAX_TERMS:
+        fails.append(f"{LIVE_SEARCH}: the match flag tests "
+                     f"{flag10.count('SUMPRODUCT(')} facets, expected {MAX_TERMS}")
     rules10 = [(str(r.sqref), ru.type, tuple(ru.formula or ()))
                for r in ws.conditional_formatting for ru in r.rules]
     if sum(1 for _q, t, f in rules10 if t == "expression"
@@ -755,8 +776,23 @@ def main(path):
     hits10 = check_live10(vals, "[empty search]", lambda r: True)
     print(f"live search: empty box matches all {len(hits10)} lots, rows stay put")
 
+    def parse10(text):
+        """'a, b + c' -> [(a,1), (b,1), (c,2)]: ',' and '/' OR, '+' and '&' AND"""
+        out, facet, cur = [], 1, ""
+        for ch in text.replace("&", "+").replace("/", ",") + "+":
+            if ch in ",+":
+                if cur.strip():
+                    out.append((cur.strip(), facet))
+                if ch == "+":
+                    facet += 1
+                cur = ""
+            else:
+                cur += ch
+        return out
+
     cases10 = (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer"),
-               ("1874, 1923", None), ("187,,1923 ,", None), ("OMKAR, STERLING", "Buyer"))
+               ("1874, 1923", None), ("187,,1923 ,", None), ("OMKAR, STERLING", "Buyer"),
+               ("copper + 1875", None), ("STERLING + 2011 / 2006", None))
     for i10, (text10, sin10) in enumerate(cases10):
         tmp = f"/tmp/verify_ls_{i10}.xlsx"
         shutil.copy(path, tmp)
@@ -766,14 +802,18 @@ def main(path):
             wb5[LIVE_SEARCH]["F3"] = sin10
         wb5.save(tmp)
         vals5 = calculate(tmp)
-        terms10 = [t.strip() for t in text10.split(",") if t.strip()]
+        pairs10 = parse10(text10)
+        facets10 = sorted({f for _t, f in pairs10})
         if sin10 == "Buyer":
-            pred10 = lambda r, ts=terms10: any(  # noqa: E731
-                t.upper() in str(truth("G", r) or "").upper() for t in ts)
+            pred10 = lambda r, ps=pairs10, fs=facets10: all(  # noqa: E731
+                any(t.upper() in str(truth("G", r) or "").upper() for t, f in ps if f == g)
+                for g in fs)
         else:
-            pred10 = lambda r, ts=terms10: any(  # noqa: E731
-                t.upper() in " ".join(str(truth(c, r) or "") for c in ("F", "G", "B")).upper()
-                for t in ts)
+            pred10 = lambda r, ps=pairs10, fs=facets10: all(  # noqa: E731
+                any(t.upper() in " ".join(str(truth(c, r) or "")
+                                          for c in ("F", "G", "B")).upper()
+                    for t, f in ps if f == g)
+                for g in fs)
         got10 = check_live10(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]", pred10)
         print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} match(es), "
               f"the other {n10 - len(got10)} rows greyed")
