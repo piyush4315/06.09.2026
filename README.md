@@ -7,6 +7,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
+| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer, or a lot name and the table below re-fills with only the matching lots — live, as you type, no macros. Cell F3 narrows what the text is looked for in. The workbook opens here. |
 | `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. The workbook opens on this sheet. |
 | `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same as `Final Calc (Transposed)` (label-only filter, no arrows on the 37 lot headers), kept as a separate tab with its own help line. |
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
@@ -22,8 +23,31 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | `Ledger Filter - Lots Down` | lots ↓ rows, fields → columns | One flat table, AutoFilter on all 35 columns, lots grouped under filter aware `SUBTOTAL` buyer rows, KPI band on top. |
 | `Ledger Filter - Lots Across` | fields ↓ rows, lots → columns | One flat table, all 37 lots as columns, AutoFilter on the FIELD column, colour coded buyer band across the top. |
 
-Every figure on the fourteen views is a **live formula** pointing at `Final Calculation Sheet` —
+Every figure on the fifteen views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
+
+## Live Search — type, and the rows re-fill
+
+| | A3 | B3 | | | E3 | F3 | G3 | H3 | I3 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | 🔍 SEARCH ▸ | **187** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **3 of 37** | showing 3 of 37 lots • search: 187 • in: Lot No. + Buyer + Name |
+| | # | Lot No. | Buyer | Lot Name | … | | | | |
+| | 1 | 1874 | NATIONAL ENTERPRISES | Scrap of Empty oil drum | | | | | |
+| | 2 | 1875 | F R KHANS ENTERPRISES | Scrap of Copper of faulty AC compressor | | | | | |
+| | 3 | 1876 | F R KHANS ENTERPRISES | Scrap of MS (extracted from equip cage…) | | | | | |
+| | ∑ | | | | … totals of the 3 lots on screen | | | | |
+
+* Matching is **contains**, not case sensitive, so `187` finds 1874 / 1875 / 1876, `NATIONAL`
+  finds all 14 lots of NATIONAL ENTERPRISES and NATIONAL SCRAP AND BUILDING MATERIAL
+  SUPPLIER, and `copper` finds the two lots with COPPER in the name. Clear the box and all 37
+  come back.
+* **F3** narrows the search to one field: `Lot No.`, `Buyer`, `Lot Name`, `Bid Sheet` or
+  `Unit` (default searches lot no. + buyer + name together).
+* The `∑` row totals only the lots on screen, and `Payment Status` / `Outstanding` are
+  colour coded.
+* No macro and nothing typed in. Hidden columns AK..AS do the work: AK builds the text each
+  lot is searched in, AM flags it 1/0, AO numbers the hits 1..n, AQ turns hit *n* back into a
+  source row — so every cell you see is a plain `INDEX` into `Final Calculation Sheet`.
 
 ## Final Calc (Transposed) — the source sheet on its side
 
@@ -179,13 +203,13 @@ lot numbers, 3 = + section headings, 4 = every field of every lot.
 
 ```bash
 pip install openpyxl
-python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all fourteen sheets in place
+python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all fifteen sheets in place
 python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install formulas
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all fourteen views against `Final Calculation Sheet` — 16,803 checks, including the filter
+all fifteen views against `Final Calculation Sheet` — 18,856 checks, including the filter
 ranges, the freeze panes, the outline levels, the 21 buyer / 4 auction bands, the buyer picker
-recalculated three times (widest buyer, a 2-lot buyer, a 1-lot buyer) and the row-value filter
-recalculated four times (unfiltered, a numeric test, a text test, buyer + test together). It
-takes four to five minutes for that reason.
+recalculated three times, the row-value filter four times and the live search four times
+(empty box, `187`, `NATIONAL`, `OMKAR` restricted to Buyer). Ten recalculations, so it takes
+about ten minutes.

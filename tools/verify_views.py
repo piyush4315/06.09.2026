@@ -20,8 +20,9 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (ADDITIVE_SRC_COLS, ALL_BUYERS, BUYER_PIVOT,  # noqa: E402
                                    BUYER_ROWS, C_FIELD_FILTER, COLLAPSIBLE, COLLAPSIBLE_ROWS,
-                                   LEDGER, LEDGER_COLS, LOT_VERTICAL, NO_FIELD,
-                                   PIVOT_SECTIONS, SECTIONS, SRC, TESTS, T_BOTH,
+                                   LEDGER, LEDGER_COLS, LIVE_SEARCH, LOT_VERTICAL, NO_FIELD,
+                                   PIVOT_SECTIONS, SEARCH_ALL, SEARCH_COLS, SECTIONS, SRC,
+                                   TESTS, T_BOTH,
                                    T_FIELD_FILTER, T_LOT_FOLDS, T_PICK_BUYER, T_VALUE_FILTER,
                                    TRANSPOSED, lot_rows, plan_fields, read_lots,
                                    transpose_labels)
@@ -663,6 +664,96 @@ def main(path):
            f"showing {len(want)} of {ncol9} lots   \u2022   buyer: {buyer9 or ALL_BUYERS}"
            f"   \u2022   {field9} {test9}"
            + ("" if test9 in ("is blank", "is not blank") else f" {value9}"))
+
+    # ================= LIVE SEARCH ========================================= #
+    # rows re-fill from the search box, so the empty search is checked from the
+    # main recalculation and each search term needs its own run
+    ws = wb[LIVE_SEARCH]
+    src_ws10 = wb[SRC]
+    label_of10 = {scol: lbl for scol, lbl in transpose_labels(src_ws10)}
+    srows10 = lot_rows(src_ws10)
+    n10 = len(srows10)
+    lotno_row = {}
+    for srow in srows10:
+        lotno_row[num(truth("F", srow))] = srow
+    heads10 = ["#"] + [label_of10[c] for c in SEARCH_COLS] + ["Payment Status"]
+    checks += 5
+    if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
+        fails.append(f"{LIVE_SEARCH}: header row is not {heads10[:4]}...")
+    if ws["B3"].value not in (None, ""):
+        fails.append(f"{LIVE_SEARCH}: the search box does not start empty ({ws['B3'].value!r})")
+    if ws["F3"].value != SEARCH_ALL:
+        fails.append(f"{LIVE_SEARCH}: 'search in' starts at {ws['F3'].value!r}, expected "
+                     f"{SEARCH_ALL!r}")
+    if [str(dv.sqref) for dv in ws.data_validations.dataValidation] != ["F3"]:
+        fails.append(f"{LIVE_SEARCH}: dropdowns on "
+                     f"{[str(dv.sqref) for dv in ws.data_validations.dataValidation]}, expected F3")
+    if ws.freeze_panes != "C5":
+        fails.append(f"{LIVE_SEARCH}: freeze {ws.freeze_panes}, expected C5")
+
+    def lrows(vals):
+        """{result row: source row} for the lots the search box currently lets through"""
+        out = {}
+        for r in range(5, 5 + n10):
+            no = vals.get((LIVE_SEARCH.upper(), f"B{r}"))
+            if no not in (None, "", "empty"):
+                out[r] = lotno_row[num(no)]
+        return out
+
+    def check_live(vals, tag):
+        got = lrows(vals)
+        for r, srow in got.items():
+            for i, scol in enumerate(SEARCH_COLS):
+                L = get_column_letter(2 + i)
+                t = truth(scol, srow)
+                eq(f"{LIVE_SEARCH}!{L}{r} [{label_of10[scol]}/lot row {srow}] {tag}",
+                   vals.get((LIVE_SEARCH.upper(), f"{L}{r}")), "" if t is None else t)
+            ad = truth("AD", srow)
+            eq(f"{LIVE_SEARCH}!AI{r} [status/lot row {srow}] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"AI{r}")),
+               "SETTLED" if num(ad) <= 0 else "OUTSTANDING")
+            eq(f"{LIVE_SEARCH}!A{r} [match # /lot row {srow}] {tag}",
+               vals.get((LIVE_SEARCH.upper(), f"A{r}")), len([x for x in got if x <= r]))
+        for i, scol in enumerate(SEARCH_COLS):
+            L = get_column_letter(2 + i)
+            if scol in ADDITIVE_SRC_COLS:
+                # the total stays blank when every lot on screen is blank
+                v10 = [truth(scol, x) for x in got.values()]
+                eq(f"{LIVE_SEARCH}!{L}42 [{label_of10[scol]}/TOTAL] {tag}",
+                   vals.get((LIVE_SEARCH.upper(), f"{L}42")),
+                   "" if not v10 or all(x is None for x in v10) else sum(num(x) for x in v10))
+        eq(f"{LIVE_SEARCH}!H3 [matches] {tag}", vals.get((LIVE_SEARCH.upper(), "H3")),
+           f"{len(got)} of {n10}")
+        return got
+
+    shown = check_live(vals, "[empty search]")
+    print(f"live search: empty box lets {len(shown)} of {n10} lots through")
+    checks += 1
+    if sorted(shown.values()) != sorted(srows10):
+        fails.append(f"{LIVE_SEARCH}: the empty search shows {len(shown)} lots, expected all {n10}")
+
+    for text10, sin10 in (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer")):
+        tmp = f"/tmp/verify_ls_{len(text10)}{len(sin10 or '')}.xlsx"
+        shutil.copy(path, tmp)
+        wb5 = openpyxl.load_workbook(tmp)
+        wb5[LIVE_SEARCH]["B3"] = text10
+        if sin10:
+            wb5[LIVE_SEARCH]["F3"] = sin10
+        wb5.save(tmp)
+        vals5 = calculate(tmp)
+        if sin10 == "Buyer":
+            want10 = [x for x in srows10 if text10.upper() in str(truth("G", x)).upper()]
+        else:
+            want10 = [x for x in srows10
+                      if text10.upper() in " ".join(str(truth(c, x) or "")
+                                                    for c in ("F", "G", "B")).upper()]
+        got10 = sorted(check_live(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]").values())
+        print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} lot(s), "
+              f"expected {len(want10)}")
+        checks += 1
+        if got10 != sorted(want10):
+            fails.append(f"{LIVE_SEARCH}: search {text10!r} in {sin10 or SEARCH_ALL} gave "
+                         f"{got10}, expected {sorted(want10)}")
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
     # four sheets share this layout; the folded ones simply reorder the columns
