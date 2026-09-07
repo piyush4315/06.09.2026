@@ -7,7 +7,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
-| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer or a lot name and the matching lots light up green while the rest fade to grey — live, as you type, no macros, and **no row ever moves or hides**. F3 narrows what the text is looked for in, H3 counts the hits, the `∑` row totals the hits only. The workbook opens here. |
+| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer or a lot name — **several at once, separated by commas** (`1874, 1923, OMKAR`) — and the matching lots light up green while the rest fade to grey, live as you type, no macros, and **no row ever moves or hides**. F3 narrows what the text is looked for in, H3 counts the hits, the `∑` row totals the hits only. The workbook opens here. |
 | `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. |
 | `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same as `Final Calc (Transposed)` (label-only filter, no arrows on the 37 lot headers), kept as a separate tab with its own help line. |
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
@@ -44,6 +44,12 @@ nothing is typed in, so they all update the moment the source sheet changes.
   lot's own position, 1..37. A matching lot gets a light green wash; the others keep their
   place but fade — grey text on a grey fill — so the whole list is still readable and you can
   still see what did *not* match.
+* **Several values at once — separate them with commas.** A lot matches if it hits **any** of
+  the terms (OR, not AND): `1874, 1923` lights up exactly those two lots, `OMKAR, STERLING`
+  lights up all 9 lots of those two buyers (2 + 7), and terms of different kinds can be mixed —
+  `copper, 2091` gives the two COPPER lots plus lot 2091. Spaces around a comma are ignored, an
+  empty term is skipped (`187,,1923 ,` behaves like `187,1923`), and up to **8 terms** are
+  read. H3 then reads `9 of 37` and the `∑` row totals just those 9.
 * Matching is **contains**, not case sensitive, so `187` finds 1874 / 1875 / 1876, `NATIONAL`
   finds all 14 lots of NATIONAL ENTERPRISES and NATIONAL SCRAP AND BUILDING MATERIAL
   SUPPLIER, and `copper` finds the two lots with COPPER in the name. Clear the box and every
@@ -56,9 +62,10 @@ nothing is typed in, so they all update the moment the source sheet changes.
   with `187` typed it totals those three lots' material value and outstanding, and it reads
   blank when nothing matches. `Payment Status` / `Outstanding` keep their colours on the hits.
 * No macro and nothing typed in: every visible cell is a plain link to the source row of the
-  same number. Hidden columns AK..AO do the work — AK builds the text each lot is searched in
+  same number. Hidden columns AK..AQ do the work — AK builds the text each lot is searched in
   from the field chosen in F3, AM holds the 1/0 match flag that both the formatting and the
-  totals read, and AO is the drop-down list behind F3.
+  totals read, AO is the drop-down list behind F3, and AQ splits the box on commas into the 8
+  terms that the flag tests.
 
 ## Final Calc (Transposed) — the source sheet on its side
 

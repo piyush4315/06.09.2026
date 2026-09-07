@@ -54,6 +54,7 @@ LIVE_SEARCH = "Live Search"                      # type a lot no. or buyer, miss
 BLANK = '""'                                     # an empty string, for inside a formula
 SEARCH_ALL = "Lot No. + Buyer + Name"
 SEARCH_IN = (SEARCH_ALL, "Lot No.", "Buyer", "Lot Name", "Bid Sheet", "Unit")
+MAX_TERMS = 8            # how many comma-separated values the search box accepts
 # column order of the live-search table: identity first, then the source's own order
 SEARCH_COLS = (["F", "G", "B", "D", "A", "E", "C"] +
                ["H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U",
@@ -2377,6 +2378,7 @@ def build_live_search(wb, buyers) -> None:
     h_hay = get_column_letter(h)
     h_hit = get_column_letter(h + 2)
     h_list = get_column_letter(h + 4)
+    h_term = get_column_letter(h + 6)               # the search box split on commas
 
     def cell(col, r):
         return f"'{SRC}'!${col}${r}"
@@ -2391,7 +2393,7 @@ def build_live_search(wb, buyers) -> None:
     widths[status_col] = 13
     for L, w in widths.items():
         ws.column_dimensions[L].width = w
-    for k in range(h, h + 5):
+    for k in range(h, h + 7):
         L = get_column_letter(k)
         ws.column_dimensions[L].width = 12
         ws.column_dimensions[L].hidden = True
@@ -2399,8 +2401,8 @@ def build_live_search(wb, buyers) -> None:
     # ---- title + how-to ---------------------------------------------------- #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (type a lot no. or a buyer - the lots that "
-               "do not match fade to grey)")
+    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (type a lot no. or a buyer, several at once "
+               "with commas - the lots that do not match fade to grey)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2409,13 +2411,15 @@ def build_live_search(wb, buyers) -> None:
     ws.merge_cells(f"A2:{last_col}2")
     c = ws["A2"]
     c.value = ("HOW TO USE  \u25b6  click the yellow box B3 and type - a lot number (1874), part of one "
-               "(187), a buyer (NATIONAL), part of a buyer name, a lot name (COPPER).  Every lot keeps "
+               "(187), a buyer (NATIONAL), part of a buyer name, a lot name (COPPER) - and several at "
+               "once, separated by commas:   1874, 1923, OMKAR   lights up every lot matching ANY of "
+               "them (up to 8 terms, empty ones ignored, spaces around a comma are fine).  Every lot keeps "
                "its own row: the ones that match stay bright and turn green, the rest fade to grey.  "
                "Clear the box and all 37 come back to normal.   \u2022   cell F3 narrows what the text is "
                "looked for in (lot no. + buyer + name by default).   \u2022   matching is 'contains', "
                "not case sensitive.   \u2022   nothing here is typed in: every figure is a live link to "
                f"'{SRC}', and the \u2211 row totals only the matching lots.   \u2022   columns "
-               f"{h_hay}..{h_list} are hidden helpers.")
+               f"{h_hay}..{h_term} are hidden helpers.")
     c.font = Font(size=9, italic=True, color="1F3864")
     c.fill = fill("FFF2CC")
     c.alignment = LEFTW
@@ -2463,7 +2467,8 @@ def build_live_search(wb, buyers) -> None:
     cnt.border = Border(left=MED, right=MED, top=MED, bottom=MED)
     ws.merge_cells(f"I3:{last_col}3")
     st = ws["I3"]
-    st.value = ('=IF($B$3="","\u25c0 type in the yellow box - a lot no., a buyer, a lot name...",'
+    st.value = ('=IF($B$3="","\u25c0 type in the yellow box - a lot no., a buyer, a lot name... '
+                'several at once, separated by commas",'
                 '"matching "&SUM($' + h_hit + '$5:$' + h_hit + '$' + str(4 + n) + ')&" of ' + str(n) +
                 ' lots   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   the rest are '
                 'greyed out, not hidden")')
@@ -2471,6 +2476,11 @@ def build_live_search(wb, buyers) -> None:
     st.fill = fill("DDEBF7")
     st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[3].height = 30
+
+    # ---- the search box split on commas (written once, read by every row) --- #
+    for j in range(MAX_TERMS):
+        ws[f"{h_term}{4 + j}"] = (
+            f'=TRIM(MID(SUBSTITUTE($B$3,",",REPT(" ",100)),{j * 100 + 1},100))')
 
     # ---- header row -------------------------------------------------------- #
     hdr = 4
@@ -2509,7 +2519,10 @@ def build_live_search(wb, buyers) -> None:
             f'IF($F$3="Bid Sheet",{cell("D", srow)},'
             f'IF($F$3="Unit",{cell("E", srow)},'
             f'{cell("F", srow)}&" "&{cell("G", srow)}&" "&{cell("B", srow)})))))')
-        ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(ISNUMBER(SEARCH($B$3,${h_hay}{rr})),1,0))'
+        hits = ",".join(
+            f'AND(${h_term}${4 + j}<>"",ISNUMBER(SEARCH(${h_term}${4 + j},${h_hay}{rr})))'
+            for j in range(MAX_TERMS))
+        ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(OR({hits}),1,0))'
         for col in range(1, ncol + 1):
             cc = ws.cell(row=rr, column=col)
             cc.border = BOX
@@ -2578,6 +2591,7 @@ def build_live_search(wb, buyers) -> None:
         ws[f"{h_list}{4 + i}"] = t
     for L, txt in ((h_hay, "the text this lot is searched in"),
                    (h_hit, "1 = this lot matches the search box"),
+                   (h_term, f"the box split on commas (up to {MAX_TERMS} terms)"),
                    (h_list, "")):
         ws[f"{L}3"] = txt or ws[f"{L}3"].value
         ws[f"{L}3"].font = Font(size=8, italic=True, color="808080")

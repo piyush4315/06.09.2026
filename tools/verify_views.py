@@ -20,7 +20,8 @@ from openpyxl.utils import get_column_letter
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (ADDITIVE_SRC_COLS, ALL_BUYERS, BUYER_PIVOT,  # noqa: E402
                                    BUYER_ROWS, C_FIELD_FILTER, COLLAPSIBLE, COLLAPSIBLE_ROWS,
-                                   LEDGER, LEDGER_COLS, LIVE_SEARCH, LOT_VERTICAL, NO_FIELD,
+                                   LEDGER, LEDGER_COLS, LIVE_SEARCH, LOT_VERTICAL, MAX_TERMS,
+                                   NO_FIELD,
                                    PIVOT_SECTIONS, SEARCH_ALL, SEARCH_COLS, SECTIONS, SRC,
                                    TESTS, T_BOTH,
                                    T_FIELD_FILTER, T_LOT_FOLDS, T_PICK_BUYER, T_VALUE_FILTER,
@@ -675,10 +676,13 @@ def main(path):
     n10 = len(srows10)
     heads10 = ["#"] + [label_of10[c] for c in SEARCH_COLS] + ["Payment Status"]
     hit_col10 = None
+    term_col10 = None
     for c in ws[3]:
         if isinstance(c.value, str) and c.value.startswith("1 ="):
             hit_col10 = c.column_letter
-    checks += 6
+        if isinstance(c.value, str) and c.value.startswith("the box split on commas"):
+            term_col10 = c.column_letter
+    checks += 7 + MAX_TERMS + 3
     if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
         fails.append(f"{LIVE_SEARCH}: header row is not {heads10[:4]}...")
     if ws["B3"].value not in (None, ""):
@@ -693,6 +697,22 @@ def main(path):
         fails.append(f"{LIVE_SEARCH}: freeze {ws.freeze_panes}, expected C5")
     if hit_col10 is None:
         fails.append(f"{LIVE_SEARCH}: no hidden match-flag column found")
+    if term_col10 is None:
+        fails.append(f"{LIVE_SEARCH}: no hidden comma-split column found")
+    else:
+        for j10 in range(MAX_TERMS):
+            exp10 = f'=TRIM(MID(SUBSTITUTE($B$3,",",REPT(" ",100)),{j10 * 100 + 1},100))'
+            got10 = ws[f"{term_col10}{4 + j10}"].value
+            if got10 != exp10:
+                fails.append(f"{LIVE_SEARCH}!{term_col10}{4 + j10} [term {j10 + 1}] is "
+                             f"{got10!r}, expected {exp10!r}")
+    flag10 = str(ws[f"{hit_col10}5"].value or "")
+    if not flag10.startswith('=IF($B$3="",1,IF(OR('):
+        fails.append(f"{LIVE_SEARCH}: the match flag is not an OR over the comma terms "
+                     f"({flag10!r})")
+    if flag10.count("ISNUMBER(SEARCH(") != MAX_TERMS:
+        fails.append(f"{LIVE_SEARCH}: the match flag searches "
+                     f"{flag10.count('ISNUMBER(SEARCH(')} terms, expected {MAX_TERMS}")
     rules10 = [(str(r.sqref), ru.type, tuple(ru.formula or ()))
                for r in ws.conditional_formatting for ru in r.rules]
     if sum(1 for _q, t, f in rules10 if t == "expression"
@@ -735,8 +755,10 @@ def main(path):
     hits10 = check_live10(vals, "[empty search]", lambda r: True)
     print(f"live search: empty box matches all {len(hits10)} lots, rows stay put")
 
-    for text10, sin10 in (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer")):
-        tmp = f"/tmp/verify_ls_{len(text10)}{len(sin10 or '')}.xlsx"
+    cases10 = (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer"),
+               ("1874, 1923", None), ("187,,1923 ,", None), ("OMKAR, STERLING", "Buyer"))
+    for i10, (text10, sin10) in enumerate(cases10):
+        tmp = f"/tmp/verify_ls_{i10}.xlsx"
         shutil.copy(path, tmp)
         wb5 = openpyxl.load_workbook(tmp)
         wb5[LIVE_SEARCH]["B3"] = text10
@@ -744,11 +766,14 @@ def main(path):
             wb5[LIVE_SEARCH]["F3"] = sin10
         wb5.save(tmp)
         vals5 = calculate(tmp)
+        terms10 = [t.strip() for t in text10.split(",") if t.strip()]
         if sin10 == "Buyer":
-            pred10 = lambda r, t=text10: t.upper() in str(truth("G", r) or "").upper()  # noqa: E731
+            pred10 = lambda r, ts=terms10: any(  # noqa: E731
+                t.upper() in str(truth("G", r) or "").upper() for t in ts)
         else:
-            pred10 = lambda r, t=text10: t.upper() in " ".join(  # noqa: E731
-                str(truth(c, r) or "") for c in ("F", "G", "B")).upper()
+            pred10 = lambda r, ts=terms10: any(  # noqa: E731
+                t.upper() in " ".join(str(truth(c, r) or "") for c in ("F", "G", "B")).upper()
+                for t in ts)
         got10 = check_live10(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]", pred10)
         print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} match(es), "
               f"the other {n10 - len(got10)} rows greyed")
