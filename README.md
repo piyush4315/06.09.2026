@@ -12,6 +12,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
 | `Transposed + Both Filters` | field labels ↓ rows, values → columns | The two together: the label-column filter button *and* the buyer / auction fold buttons. |
 | `Transposed - Pick a Buyer` | field labels ↓ rows, values → columns | Same transposed layout, but the lot columns follow a **buyer dropdown in B3**: pick a buyer and only its lots are shown (up to 13 columns), every figure re-pointed by INDEX/MATCH. No macros. |
+| `Transposed - Filter Values` | field labels ↓ rows, values → columns | Same grid, plus a **query panel in row 3**: pick a buyer, pick a ROW (any of the 33 fields), a test (`>`, `contains`, `is blank` …) and a value — only the lots that pass fill the columns. This is the sheet that filters by a row's values. The workbook opens here. |
 | `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
 | `Buyer Rows (Filter)` | **buyers ↓ rows**, details → columns | One row per buyer, 30 detail columns across, a `▼` on **every** column — including `BUYER`, so ticking buyers hides the rest. The `∑ TOTAL` row uses SUBTOTAL, so it totals only the buyers left visible. |
 | `Lot-wise Vertical` | **everything downwards** | Buyer ▸ lot ▸ field, one below the other. Three fold levels: buyer → lot → field. Each buyer ends with its own `∑ TOTALS` block, the sheet ends with an all-buyers grand total. |
@@ -21,7 +22,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | `Ledger Filter - Lots Down` | lots ↓ rows, fields → columns | One flat table, AutoFilter on all 35 columns, lots grouped under filter aware `SUBTOTAL` buyer rows, KPI band on top. |
 | `Ledger Filter - Lots Across` | fields ↓ rows, lots → columns | One flat table, all 37 lots as columns, AutoFilter on the FIELD column, colour coded buyer band across the top. |
 
-Every figure on the thirteen views is a **live formula** pointing at `Final Calculation Sheet` —
+Every figure on the fourteen views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
 
 ## Final Calc (Transposed) — the source sheet on its side
@@ -77,6 +78,28 @@ it, one each way:
   Now `BUYER` is a real column, so its `▼` filters buyers the way Excel intends; every other
   column has an arrow too (Payment Status, Collection %, …). The `∑ TOTAL — visible buyers`
   row sits below the filter range and uses `SUBTOTAL(109,…)`, so it follows the filter.
+
+### Filtering by a ROW's values
+
+The arrow on the FIELD column picks *which rows show*. To pick which **lots** show on the
+strength of one row's values — "the lots whose Outstanding is greater than 0", "the lots whose
+Lot Name contains COPPER", "the lots with no invoice number yet" — use
+**`Transposed - Filter Values`**. Its row 3 is a query panel, not a filter arrow:
+
+| | A3 | B3 | C3 | D3 | E3 | F3 | G3 | H3 | I3 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | FILTER ▸ | **1 buyer** ▾ | 2 ROW ▸ | **Outstanding** ▾ | 3 TEST ▸ | **>** ▾ | 4 VALUE ▸ | **0** | showing 9 of 37 lots • buyer: ALL BUYERS • Outstanding > 0 |
+
+Only the lots that pass fill the columns, left to right; the rest stay empty. Verified
+combinations: `Outstanding > 0` → 9 lots · `Total Received >= 1000000` → 4 · `Buyer =
+STERLING ENTERPRISES` → 7 · `Invoice No. is blank` → 5 · buyer *and* `Outstanding > 0` → 2.
+Set cell 2 back to `— no row filter —` to see all 37 again. The `TOTAL` column then totals
+just the lots on screen, and the `▼` on the FIELD column still hides rows.
+
+Hidden helper columns AO..BA do the work: AO/AQ/AS hold the three dropdown lists, AW flags
+each source lot 1/0 against the panel, AY numbers the ones that pass, and BA turns that number
+back into a source row — so every visible cell is still a plain `INDEX` into
+`Final Calculation Sheet`.
 
 ### Lot folds (the two grouped sheets)
 
@@ -156,12 +179,13 @@ lot numbers, 3 = + section headings, 4 = every field of every lot.
 
 ```bash
 pip install openpyxl
-python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all thirteen sheets in place
+python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all fourteen sheets in place
 python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install formulas
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all thirteen views against `Final Calculation Sheet` — 15,062 checks, including the filter
-ranges, the freeze panes, the outline levels, the 21 buyer / 4 auction bands, and the buyer
-picker recalculated three times (widest buyer, a 2-lot buyer, a 1-lot buyer). It takes about
-three minutes for that reason.
+all fourteen views against `Final Calculation Sheet` — 16,803 checks, including the filter
+ranges, the freeze panes, the outline levels, the 21 buyer / 4 auction bands, the buyer picker
+recalculated three times (widest buyer, a 2-lot buyer, a 1-lot buyer) and the row-value filter
+recalculated four times (unfiltered, a numeric test, a text test, buyer + test together). It
+takes four to five minutes for that reason.

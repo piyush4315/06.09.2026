@@ -49,10 +49,14 @@ T_BOTH = "Transposed + Both Filters"             # the two together
 C_FIELD_FILTER = "Collapsible + Field Filter"    # collapsible blocks + label filter
 T_PICK_BUYER = "Transposed - Pick a Buyer"       # choose a buyer, its lots fill the columns
 BUYER_ROWS = "Buyer Rows (Filter)"               # one row per buyer, filter the Buyer column
+T_VALUE_FILTER = "Transposed - Filter Values"    # filter the lot columns by any row's values
+ALL_BUYERS = "ALL BUYERS"
+NO_FIELD = "\u2014 no row filter \u2014"
+TESTS = ("=", "<>", ">", ">=", "<", "<=", "contains", "is blank", "is not blank")
 # in workbook order: the sheet built LAST is the one that lands at index 1
 ALL_VIEWS = (TRANSPOSED, T_FIELD_FILTER, T_LOT_FOLDS, T_BOTH, T_PICK_BUYER,
-             BUYER_PIVOT, BUYER_ROWS, LOT_VERTICAL, COLLAPSIBLE, C_FIELD_FILTER,
-             COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
+             T_VALUE_FILTER, BUYER_PIVOT, BUYER_ROWS, LOT_VERTICAL, COLLAPSIBLE,
+             C_FIELD_FILTER, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
@@ -2100,6 +2104,247 @@ def build_buyer_rows(wb, buyers) -> None:
     ws.print_title_cols = "A:A"
 
 
+# --------------------------------------------------------------------------- #
+# transposed sheet that filters the lot columns by the values of any one row
+# --------------------------------------------------------------------------- #
+def build_value_filter(wb, buyers) -> None:
+    """Same transposed grid, but the lot columns are filtered by a row's values.
+
+    Excel's own filter arrow can only ever hide rows, so "show me the lots whose
+    Outstanding is > 0" cannot be done with an arrow on the transposed grid. This
+    sheet does it with a query panel instead: pick a buyer, pick a ROW (field),
+    a test and a value, and only the lots that pass fill the columns.
+    """
+    src_ws = wb[SRC]
+    fields = transpose_labels(src_ws)
+    rows = lot_rows(src_ws)
+    first, last = rows[0], rows[-1]
+    names = list(buyers)
+    ncol = len(rows)
+    last_scol = fields[-1][0]
+    ws = wb.create_sheet(T_VALUE_FILTER)
+    total_idx = 2 + ncol
+    last_col = get_column_letter(total_idx)
+    blank = '""'
+    src2d = f"'{SRC}'!$A${first}:${last_scol}${last}"
+
+    h = total_idx + 2
+    h_labels = get_column_letter(h)
+    h_buyers = get_column_letter(h + 2)
+    h_tests = get_column_letter(h + 4)
+    h_pos = get_column_letter(h + 6)
+    h_pass = get_column_letter(h + 8)
+    h_run = get_column_letter(h + 10)
+    h_row = get_column_letter(h + 12)
+
+    ws.sheet_properties.tabColor = "833C00"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_format.outlineLevelRow = 0
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 34
+    for i in range(ncol):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 14.5
+    ws.column_dimensions[last_col].width = 17
+    for k in range(h, h + 13):
+        L = get_column_letter(k)
+        ws.column_dimensions[L].width = 12
+        ws.column_dimensions[L].hidden = True
+
+    # ---- title + how-to --------------------------------------------------- #
+    ws.merge_cells(f"A1:{last_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  TRANSPOSED, FILTERED BY A ROW'S VALUES   "
+               "(pick a row, a test and a value \u2192 only the matching lots show)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  an Excel filter arrow can only hide ROWS, so on this grid (lots "
+               "across the columns) it cannot drop the lots that fail a test.  These four cells do it "
+               "instead:  1 pick a buyer (or ALL),  2 pick the ROW whose values you want to test - "
+               "Outstanding, Total Received, Buyer, Lot Name, anything -  3 pick the test,  4 type the "
+               "value.  Only the lots that pass fill the columns, left to right; clear cell 2 back to "
+               f"'{NO_FIELD}' to see them all.   \u2022   the \u25bc on the FIELD column still hides "
+               "rows, and every figure is a live INDEX / MATCH into "
+               f"'{SRC}', so nothing here can drift from the source.   \u2022   columns "
+               f"{h_labels}..{h_row} are hidden helpers.")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 56
+
+    # ---- the query panel (row 3) ------------------------------------------ #
+    panel = (("1  \u25b8  BUYER", "B", f"${h_buyers}$4:${h_buyers}${4 + len(names)}"),
+             ("2  \u25b8  ROW (field)", "D", f"${h_labels}$4:${h_labels}${3 + len(fields)}"),
+             ("3  \u25b8  TEST", "F", f"${h_tests}$4:${h_tests}${3 + len(TESTS)}"))
+    for text, L, listref in panel:
+        lab = ws[f"{chr(ord(L) - 1)}3"]
+        lab.value = text
+        lab.font = Font(bold=True, size=10, color="FFFFFF")
+        lab.fill = fill("404040")
+        lab.alignment = Alignment(horizontal="right", vertical="center")
+        cell = ws[f"{L}3"]
+        cell.font = Font(bold=True, size=11, color="1F3864")
+        cell.fill = fill("FFE699")
+        cell.alignment = CENTER
+        cell.border = Border(left=MED, right=MED, top=MED, bottom=MED)
+        dv = DataValidation(type="list", formula1=listref, allow_blank=True,
+                            showDropDown=False)
+        ws.add_data_validation(dv)
+        dv.add(cell)
+    ws.column_dimensions["A"].width = 34
+    ws["A3"].value = "FILTER  \u25b8"
+    ws["A3"].font = Font(bold=True, size=11, color="FFFFFF")
+    ws["A3"].fill = fill("1F3864")
+    ws["A3"].alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws["B3"] = ALL_BUYERS
+    ws["D3"] = NO_FIELD
+    ws["F3"] = TESTS[0]
+    lab = ws["G3"]
+    lab.value = "4  \u25b8  VALUE"
+    lab.font = Font(bold=True, size=10, color="FFFFFF")
+    lab.fill = fill("404040")
+    lab.alignment = Alignment(horizontal="right", vertical="center")
+    val = ws["H3"]
+    val.value = 0
+    val.font = Font(bold=True, size=11, color="1F3864")
+    val.fill = fill("FFE699")
+    val.alignment = CENTER
+    val.border = Border(left=MED, right=MED, top=MED, bottom=MED)
+    ws.merge_cells(f"I3:{last_col}3")
+    st = ws["I3"]
+    grng = f"'{SRC}'!$F${first}:$F${last}"
+    st.value = ('="showing "&COUNT($B$4:$' + last_col + '$4)&" of "&COUNT(' + grng +
+                ')&" lots   \u2022   buyer: "&$B$3'
+                f'&IF($D$3="{NO_FIELD}","","   \u2022   "&$D$3&" "&$F$3'
+                f'&IF(OR($F$3="is blank",$F$3="is not blank"),""," "&$H$3))')
+    st.font = Font(bold=True, size=10, color="1F3864")
+    st.fill = fill("DDEBF7")
+    st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[3].height = 26
+
+    # ---- hidden helpers ---------------------------------------------------- #
+    ws[f"{h_pos}2"] = f"=IFERROR(MATCH($D$3,${h_labels}$4:${h_labels}${3 + len(fields)},0),1)"
+    ws[f"{h_pos}1"] = "source column of the chosen row"
+    for i, (_scol, label) in enumerate(fields):
+        ws[f"{h_labels}{4 + i}"] = label
+    ws[f"{h_labels}3"] = "row (field) list for cell 2"
+    ws[f"{h_buyers}4"] = ALL_BUYERS
+    for i, name in enumerate(names):
+        ws[f"{h_buyers}{5 + i}"] = name
+    ws[f"{h_buyers}3"] = "buyer list for cell 1"
+    for i, t in enumerate(TESTS):
+        ws[f"{h_tests}{4 + i}"] = t
+    ws[f"{h_tests}3"] = "test list for cell 3"
+    for L in (h_pos, h_labels, h_buyers, h_tests):
+        for rr in (1, 3):
+            ws[f"{L}{rr}"].font = Font(size=8, italic=True, color="808080")
+
+    def test_expr(r):
+        v = f"INDEX({src2d},{r}-3,${h_pos}$2)"
+        return (f'IF($F$3="is blank",IF({v}="",1,0),'
+                f'IF($F$3="is not blank",IF({v}="",0,1),'
+                f'IF($F$3="contains",IF(ISNUMBER(SEARCH($H$3,{v})),1,0),'
+                f'IF($F$3="=",IF({v}=$H$3,1,0),'
+                f'IF($F$3="<>",IF({v}=$H$3,0,1),'
+                f'IF($F$3=">",IF(N({v})>N($H$3),1,0),'
+                f'IF($F$3=">=",IF(N({v})>=N($H$3),1,0),'
+                f'IF($F$3="<",IF(N({v})<N($H$3),1,0),'
+                f'IF($F$3="<=",IF(N({v})<=N($H$3),1,0),0)))))))))')
+
+    for sr in range(first, last + 1):
+        ws[f"{h_pass}{sr}"] = (
+            f'=IF(OR($B$3="{ALL_BUYERS}",\'{SRC}\'!$G{sr}=$B$3),'
+            f'IF($D$3="{NO_FIELD}",1,{test_expr(sr)}),0)')
+        ws[f"{h_run}{sr}"] = f'=IF({h_pass}{sr}=1,SUM(${h_pass}${first}:{h_pass}{sr}),{blank})'
+    ws[f"{h_pass}3"] = "1 = this lot passes the filter"
+    ws[f"{h_run}3"] = "running count of the lots that pass"
+    ws[f"{h_row}3"] = "source row behind each lot column"
+    for L in (h_pass, h_run, h_row):
+        ws[f"{L}3"].font = Font(size=8, italic=True, color="808080")
+    for i in range(1, ncol + 1):
+        ws[f"{h_row}{3 + i}"] = (f"=IFERROR(MATCH({i},${h_run}${first}:${h_run}${last},0)"
+                                 f"+{first - 1},{blank})")
+
+    # ---- header row -------------------------------------------------------- #
+    hdr = 4
+    c = ws.cell(row=hdr, column=1, value="FIELD (row 3 of the source)  \u25b8  |  MATCHING LOT \u2192")
+    c.font = Font(bold=True, size=10, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for i in range(ncol):
+        x = ws.cell(row=hdr, column=2 + i,
+                    value=(f"=IFERROR(INDEX('{SRC}'!$F${first}:$F${last},"
+                           f"${h_row}{4 + i}-{first - 1}),{blank})"))
+        x.number_format = KIND_FMT["num0"]
+        x.font = Font(bold=True, size=10, color="FFFFFF")
+        x.fill = fill("833C00")
+        x.alignment = CENTER
+    t = ws.cell(row=hdr, column=total_idx, value='="TOTAL  (matching lots)"')
+    t.font = Font(bold=True, size=10, color="FFFFFF")
+    t.fill = fill("1F3864")
+    t.alignment = CENTER
+    for col in range(1, total_idx + 1):
+        ws.cell(row=hdr, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 30
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # ---- one row per source field ------------------------------------------ #
+    r = hdr + 1
+    for k, (scol, label) in enumerate(fields):
+        a = ws.cell(row=r, column=1, value=label)
+        a.font = Font(bold=True, size=10, color="1F3864")
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        a.fill = fill("DDEBF7" if k % 2 else "F4F9FD")
+        fmt = src_ws[f"{scol}{first}"].number_format or "General"
+        for i in range(ncol):
+            L = get_column_letter(2 + i)
+            rng = f"'{SRC}'!${scol}${first}:${scol}${last}"
+            idx = f"${h_row}{4 + i}-{first - 1}"
+            x = ws[f"{L}{r}"]
+            x.value = (f'=IFERROR(IF(INDEX({rng},{idx})="","",INDEX({rng},{idx})),{blank})')
+            x.number_format = fmt
+            x.font = Font(size=10, color="333333")
+            x.alignment = LEFT if fmt in ("General", "@") else RIGHT
+            if i % 2:
+                x.fill = fill("F7F7F7")
+        tt = ws.cell(row=r, column=total_idx)
+        if scol in ADDITIVE_SRC_COLS:
+            tt.value = (f"=IF(COUNT({get_column_letter(2)}{r}:"
+                        f"{get_column_letter(1 + ncol)}{r})=0,{blank},"
+                        f"SUM({get_column_letter(2)}{r}:{get_column_letter(1 + ncol)}{r}))")
+            tt.number_format = fmt
+        else:
+            tt.value = "\u2013"
+            tt.number_format = "General"
+        tt.font = Font(bold=True, size=10, color="1F3864")
+        tt.alignment = LEFT if fmt in ("General", "@") else RIGHT
+        tt.fill = fill("DDEBF7")
+        for col in range(1, total_idx + 1):
+            ws.cell(row=r, column=col).border = BOX
+        ws.cell(row=r, column=total_idx).border = Border(
+            left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+        ws.row_dimensions[r].height = 15
+        r += 1
+    last_row = r - 1
+
+    ws.auto_filter.ref = f"A{hdr}:A{last_row}"
+    out_row = hdr + 1 + [lbl for _l, lbl in fields].index("Outstanding")
+    ws.conditional_formatting.add(
+        f"{get_column_letter(2)}{out_row}:{get_column_letter(1 + ncol)}{out_row}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                   fill=fill("FFC7CE")))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_cols = "A:A"
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -2109,6 +2354,7 @@ def main(path: str) -> None:
             del wb[name]
     buyers = read_lots(wb[SRC])
     build_pick_buyer(wb, buyers)
+    build_value_filter(wb, buyers)
     build_buyer_rows(wb, buyers)
     build_ledger_cols(wb, buyers)
     build_ledger(wb, buyers)
@@ -2136,7 +2382,7 @@ def main(path: str) -> None:
     # the builders insert at different places, so put the tabs in ALL_VIEWS order
     for i, name in enumerate([SRC] + list(ALL_VIEWS)):
         wb.move_sheet(name, offset=i - wb.sheetnames.index(name))
-    wb.active = wb.sheetnames.index(T_PICK_BUYER)   # opens on the buyer picker
+    wb.active = wb.sheetnames.index(T_VALUE_FILTER)  # opens on the row-value filter
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.

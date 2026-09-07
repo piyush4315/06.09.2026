@@ -18,10 +18,11 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, "tools")
-from build_buyer_lot_views import (ADDITIVE_SRC_COLS, BUYER_PIVOT, BUYER_ROWS,  # noqa: E402
-                                   C_FIELD_FILTER, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER,
-                                   LEDGER_COLS, LOT_VERTICAL, PIVOT_SECTIONS, SECTIONS, SRC,
-                                   T_BOTH, T_FIELD_FILTER, T_LOT_FOLDS, T_PICK_BUYER,
+from build_buyer_lot_views import (ADDITIVE_SRC_COLS, ALL_BUYERS, BUYER_PIVOT,  # noqa: E402
+                                   BUYER_ROWS, C_FIELD_FILTER, COLLAPSIBLE, COLLAPSIBLE_ROWS,
+                                   LEDGER, LEDGER_COLS, LOT_VERTICAL, NO_FIELD,
+                                   PIVOT_SECTIONS, SECTIONS, SRC, TESTS, T_BOTH,
+                                   T_FIELD_FILTER, T_LOT_FOLDS, T_PICK_BUYER, T_VALUE_FILTER,
                                    TRANSPOSED, lot_rows, plan_fields, read_lots,
                                    transpose_labels)
 
@@ -545,6 +546,123 @@ def main(path):
                    "\u2013")
         eq(f"{T_PICK_BUYER}!E3 [{buyer}/status line]", V3("E3"),
            f"showing {len(rows_b)} lot(s) of {len(rows_b)} for {buyer}")
+
+    # ================= TRANSPOSED - FILTER VALUES ========================== #
+    # the lot columns follow the query panel in row 3, so the default panel is
+    # checked from the main recalculation and each filter needs its own run
+    ws = wb[T_VALUE_FILTER]
+    fields9 = transpose_labels(wb[SRC])
+    srows9 = lot_rows(wb[SRC])
+    ncol9 = len(srows9)
+    vrow_of = {}
+    for r in range(5, ws.max_row + 1):
+        v = ws[f"A{r}"].value
+        if isinstance(v, str) and v.strip():
+            vrow_of[v.strip()] = r
+    row_of_lotno = {}
+    for srow in srows9:
+        row_of_lotno[num(truth("F", srow))] = srow
+    checks += 4
+    if len(row_of_lotno) != len(srows9):
+        fails.append(f"{T_VALUE_FILTER}: lot numbers are not unique, cannot map columns")
+    if ws.auto_filter.ref != f"A4:A{4 + len(fields9)}":
+        fails.append(f"{T_VALUE_FILTER}: autofilter {ws.auto_filter.ref}, expected the "
+                     f"label column only")
+    dvs = {str(dv.sqref): dv.formula1 for dv in ws.data_validations.dataValidation}
+    if sorted(dvs) != ["B3", "D3", "F3"]:
+        fails.append(f"{T_VALUE_FILTER}: dropdowns on {sorted(dvs)}, expected B3, D3, F3")
+    if ws["D3"].value != NO_FIELD or ws["B3"].value != ALL_BUYERS:
+        fails.append(f"{T_VALUE_FILTER}: the panel does not start unfiltered "
+                     f"({ws['B3'].value!r} / {ws['D3'].value!r})")
+
+    def vcols(vals):
+        """{source row: column letter} for the lots the panel currently lets through"""
+        out = {}
+        for i in range(ncol9):
+            L = get_column_letter(2 + i)
+            no = vals.get((T_VALUE_FILTER.upper(), f"{L}4"))
+            if no not in (None, "", "empty"):
+                out[row_of_lotno[num(no)]] = L
+        return out
+
+    default_cols = vcols(vals)
+    print(f"filter values: default panel lets {len(default_cols)} of {ncol9} lots through")
+    checks += 1
+    if sorted(default_cols) != sorted(srows9):
+        fails.append(f"{T_VALUE_FILTER}: the unfiltered panel shows "
+                     f"{len(default_cols)} lots, expected all {ncol9}")
+    for scol, label in fields9:
+        rr = vrow_of.get(label)
+        if rr is None:
+            fails.append(f"{T_VALUE_FILTER}: field row '{label}' missing")
+            continue
+        for srow, L in default_cols.items():
+            t = truth(scol, srow)
+            eq(f"{T_VALUE_FILTER}!{L}{rr} [{label}/lot row {srow}]",
+               V(T_VALUE_FILTER, f"{L}{rr}"), "" if t is None else t)
+        tot = get_column_letter(2 + ncol9)
+        if scol in ADDITIVE_SRC_COLS:
+            eq(f"{T_VALUE_FILTER}!{tot}{rr} [{label}/TOTAL all lots]",
+               V(T_VALUE_FILTER, f"{tot}{rr}"), sum(num(truth(scol, x)) for x in srows9))
+
+    # three filtered runs: a numeric row test, a text row test, and both panels
+    widest9 = max(buyers, key=lambda b: len(buyers[b]))
+    cases = [("Outstanding", ">", 0, None),
+             ("Lot Name", "contains", "COPPER", None),
+             ("Outstanding", ">", 0, widest9)]
+    for field9, test9, value9, buyer9 in cases:
+        tmp = f"/tmp/verify_vf_{len(field9)}{len(str(value9))}{len(buyer9 or '')}.xlsx"
+        shutil.copy(path, tmp)
+        wb4 = openpyxl.load_workbook(tmp)
+        p4 = wb4[T_VALUE_FILTER]
+        p4["D3"], p4["F3"], p4["H3"] = field9, test9, value9
+        if buyer9:
+            p4["B3"] = buyer9
+        wb4.save(tmp)
+        vals4 = calculate(tmp)
+
+        def V4(addr, _v=vals4):
+            return _v.get((T_VALUE_FILTER.upper(), addr))
+        src_col = dict((lbl, sc) for sc, lbl in fields9)[field9]
+        want = []
+        for srow in srows9:
+            if buyer9 and str(truth("G", srow)).strip() != buyer9:
+                continue
+            v9 = truth(src_col, srow)
+            if test9 == ">":
+                ok = num(v9) > num(value9)
+            elif test9 == "contains":
+                ok = str(value9).upper() in str(v9 or "").upper()
+            else:
+                ok = False
+            if ok:
+                want.append(srow)
+        got = vcols(vals4)
+        print(f"filter values: {buyer9 or ALL_BUYERS} / {field9} {test9} {value9} "
+              f"-> {len(got)} lot(s), expected {len(want)}")
+        checks += 1
+        if sorted(got) != sorted(want):
+            fails.append(f"{T_VALUE_FILTER}: '{field9} {test9} {value9}'"
+                         f"{' for ' + buyer9 if buyer9 else ''} let through "
+                         f"{sorted(got)}, expected {sorted(want)}")
+        for scol, label in fields9:
+            rr = vrow_of[label]
+            for srow, L in got.items():
+                t = truth(scol, srow)
+                eq(f"{T_VALUE_FILTER}!{L}{rr} [{label}/lot row {srow} filtered]",
+                   V4(f"{L}{rr}"), "" if t is None else t)
+        tot = get_column_letter(2 + ncol9)
+        for scol, label in fields9:
+            if scol not in ADDITIVE_SRC_COLS:
+                continue
+            rr = vrow_of[label]
+            v9s = [truth(scol, x) for x in want]
+            eq(f"{T_VALUE_FILTER}!{tot}{rr} [{label}/TOTAL filtered]", V4(f"{tot}{rr}"),
+               "" if all(x is None for x in v9s) else sum(num(x) for x in v9s))
+        eq(f"{T_VALUE_FILTER}!I3 [status line]", V4("I3"),
+           f"showing {len(want)} of {ncol9} lots   \u2022   buyer: {buyer9 or ALL_BUYERS}"
+           f"   \u2022   {field9} {test9}"
+           + ("" if test9 in ("is blank", "is not blank") else f" {value9}"))
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
     # four sheets share this layout; the folded ones simply reorder the columns
