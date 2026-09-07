@@ -27,7 +27,8 @@ import sys
 from collections import OrderedDict
 
 from openpyxl import load_workbook
-from openpyxl.formatting.rule import CellIsRule, DataBarRule, FormulaRule
+from openpyxl.formatting.rule import (CellIsRule, ColorScaleRule, DataBarRule,
+                                      FormulaRule)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
@@ -39,7 +40,8 @@ COLLAPSIBLE_ROWS = "Collapsible - Lots Down"     # lots as rows, fields as colum
 LEDGER = "Ledger Filter - Lots Down"             # lots as rows, fields as columns
 LEDGER_COLS = "Ledger Filter - Lots Across"      # fields as rows, lots as columns
 LOT_VERTICAL = "Lot-wise Vertical"               # buyer > lot > fields, all downwards
-ALL_VIEWS = (LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
+BUYER_PIVOT = "Buyer Pivot"                      # buyers across, every detail down
+ALL_VIEWS = (BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
@@ -1175,6 +1177,281 @@ def build_lot_vertical(wb, buyers):
 
 
 
+# --------------------------------------------------------------------------- #
+# sheet 6 - buyer pivot: buyers across the top, every detail down the side
+# --------------------------------------------------------------------------- #
+def _rng(col):
+    return f"'{SRC}'!${col}${FIRST_DATA_ROW}:${col}${LAST_SRC_ROW}"
+
+
+def _sumif(b, col):
+    return f"SUMIF('{SRC}'!$G${FIRST_DATA_ROW}:$G${LAST_SRC_ROW},{b},{_rng(col)})"
+
+
+def _countif(b):
+    return f"COUNTIF('{SRC}'!$G${FIRST_DATA_ROW}:$G${LAST_SRC_ROW},{b})"
+
+
+def _countblank(b, col):
+    """how many of that buyer's lots have an empty cell in `col`.
+
+    Deliberately uses the "" criterion rather than "<>": the non-blank form is
+    not evaluated consistently across spreadsheet engines, the blank form is.
+    """
+    return (f"COUNTIFS('{SRC}'!$G${FIRST_DATA_ROW}:$G${LAST_SRC_ROW},{b},"
+            f"{_rng(col)},\"\")")
+
+
+# labels reused by the derived rows (kept in constants: an f-string expression
+# may not contain a backslash escape)
+L_OUT = "Outstanding (\u20b9)"
+L_MAT = "Mat. Value (\u20b9)"
+L_QTY = "Quantity (total)"
+L_GST_TDS = "GST TDS (\u20b9)"
+L_SD_EXP = "SD Expected (\u20b9)"
+L_SD_REC = "SD Received (\u20b9)"
+L_FP_EXP = "FP Expected (\u20b9)"
+L_FP_REC = "FP Received (\u20b9)"
+L_RECV = "Total Received (\u20b9)"
+L_RECEIV = "Total Receivables (\u20b9)"
+
+# (label, number format, per-buyer spec, total-column spec)
+PIVOT_SECTIONS = [
+    ("BUYER OVERVIEW", "1F4E79", [
+        ("Lots",                     "0",        "lots",       "sum"),
+        ("Mat. Value (\u20b9)",      "#,##0",    "H",          "sum"),
+        ("Total Received (\u20b9)", "#,##0",    "AC",         "sum"),
+        ("Outstanding (\u20b9)",    "#,##0",    "AD",         "sum"),
+        ("Payment Status",           "@",        "status",     "status"),
+    ]),
+    ("LOT INFORMATION", "C55A11", [
+        ("Quantity (total)",         "#,##0.###", "A",         "sum"),
+        ("Avg Rate (\u20b9)",       "#,##0",    "avg_rate",   "avg_rate"),
+        ("Lots pending invoice",     "0",        "inv_pending", "sum"),
+    ]),
+    ("FINANCIALS", "548235", [
+        ("GST @ 18% (\u20b9)",      "#,##0",    "I",          "sum"),
+        ("Mat. Value + GST (\u20b9)", "#,##0",  "J",          "sum"),
+        ("TCS @ 2% (\u20b9)",       "#,##0",    "K",          "sum"),
+        ("TDS u/s 194(O) (\u20b9)", "#,##0.00", "L",          "sum"),
+        ("Service Charge gross (\u20b9)", "#,##0.00", "M",    "sum"),
+        ("TDS u/s 194(H) (\u20b9)", "#,##0.00", "N",          "sum"),
+        ("Net Service Charge (\u20b9)", "#,##0.00", "O",      "sum"),
+        ("Svc Charge to MSTC (\u20b9)", "#,##0", "P",         "sum"),
+        ("GST TDS (\u20b9)",        "#,##0",    "R",          "sum"),
+        ("GST TDS % (effective)",    "0.00%",    "gst_tds_pct", "gst_tds_pct"),
+        ("Total Receivables (\u20b9)", "#,##0", "S",          "sum"),
+    ]),
+    ("SECURITY DEPOSIT", "7030A0", [
+        ("SD Expected (\u20b9)",    "#,##0",    "T",          "sum"),
+        ("SD Received (\u20b9)",    "#,##0",    "U",          "sum"),
+        ("SD Outstanding (\u20b9)", "#,##0",    "sd_out",     "sd_out"),
+    ]),
+    ("FINAL PAYMENT", "00838F", [
+        ("FP Expected (\u20b9)",    "#,##0",    "W",          "sum"),
+        ("FP Received (\u20b9)",    "#,##0",    "X",          "sum"),
+        ("FP Outstanding (\u20b9)", "#,##0",    "fp_out",     "fp_out"),
+    ]),
+    ("LPP", "C00000", [
+        ("LPP Expected (\u20b9)",   "#,##0",    "Z",          "sum"),
+        ("LPP Received (\u20b9)",   "#,##0",    "AA",         "sum"),
+    ]),
+    ("DOCUMENT", "BF8F00", [
+        ("Invoices raised",          "0",        "inv_raised", "sum"),
+        ("SAP Docs posted",          "0",        "sap_posted", "sum"),
+    ]),
+    ("RECOVERY", "A51E4D", [
+        ("Collection %",             "0.0%",     "collection", "collection"),
+    ]),
+]
+
+
+def build_buyer_pivot(wb, buyers):
+    """Buyer names across the top, every detail as a row, one column per buyer."""
+    ws = wb.create_sheet(BUYER_PIVOT, 1)
+    names = list(buyers)
+    nb = len(names)
+    total_col = get_column_letter(2 + nb)
+
+    ws.sheet_properties.tabColor = "7030A0"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+    ws.sheet_properties.outlinePr.summaryRight = True
+    ws.sheet_format.outlineLevelRow = 1
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 32
+    for i in range(nb):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 16
+    ws.column_dimensions[total_col].width = 18
+
+    ws.merge_cells(f"A1:{total_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  BUYER PIVOT   (buyers \u2192 columns  |  every detail "
+               "\u2193 rows)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{total_col}2")
+    c = ws["A2"]
+    c.value = ("HOW TO USE  \u25b6  one column per buyer, every figure a live SUMIF / COUNTIF against "
+               "'Final Calculation Sheet' - change a buyer name in row 3 and its whole column follows   "
+               "\u2022   filter with the \u25bc arrow on the FIELD column in row 3   \u2022   the \u2212 / + "
+               "in the left margin folds a whole detail band   \u2022   the last column totals every buyer")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 32
+
+    # header row ------------------------------------------------------------- #
+    hdr = 3
+    c = ws.cell(row=hdr, column=1, value="FIELD  \u25b8   |   BUYER \u2192")
+    c.font = Font(bold=True, size=10, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    for i, buyer in enumerate(names):
+        accent, tint, pale = THEMES[i % len(THEMES)]
+        cc = ws.cell(row=hdr, column=2 + i, value=buyer)
+        cc.font = Font(bold=True, size=10, color="FFFFFF")
+        cc.fill = fill(accent)
+        cc.alignment = CENTER
+    cc = ws.cell(row=hdr, column=2 + nb, value="TOTAL \u2014 ALL BUYERS")
+    cc.font = Font(bold=True, size=10, color="FFFFFF")
+    cc.fill = fill("1F3864")
+    cc.alignment = CENTER
+    for col in range(1, 3 + nb):
+        ws.cell(row=hdr, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 66
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # row map (needed for the derived rows that point at other rows) --------- #
+    row_of = {}
+    r = hdr + 1
+    layout = []
+    for sname, colour, fields in PIVOT_SECTIONS:
+        layout.append(("section", sname, colour, r))
+        r += 1
+        for label, fmt, spec, tspec in fields:
+            layout.append(("field", label, (fmt, spec, tspec), r))
+            row_of[label] = r
+            r += 1
+    last_row = r - 1
+
+    def cell_of(buyer_col, label):
+        return f"{buyer_col}{row_of[label]}"
+
+    for kind, name, extra, rr in layout:
+        if kind == "section":
+            for col in range(1, 3 + nb):
+                cc = ws.cell(row=rr, column=col)
+                cc.fill = fill(extra)
+                cc.border = BOX
+            cc = ws.cell(row=rr, column=1, value=f"  \u25b8 {name}")
+            cc.font = Font(bold=True, size=10, color="FFFFFF")
+            cc.alignment = LEFT
+            ws.row_dimensions[rr].height = 17
+            continue
+
+        label, (fmt, spec, tspec) = name, extra
+        a = ws.cell(row=rr, column=1, value=f"      {label}")
+        a.font = Font(size=10, color="333333")
+        a.alignment = LEFT
+        for i in range(nb):
+            col = get_column_letter(2 + i)
+            b = f"{col}${hdr}"
+            accent, tint, pale = THEMES[i % len(THEMES)]
+            cc = ws.cell(row=rr, column=2 + i)
+            if spec == "lots":
+                cc.value = f"={_countif(b)}"
+            elif spec == "status":
+                cc.value = f'=IF({_sumif(b, "AD")}<=0,"SETTLED","OUTSTANDING")'
+            elif spec == "avg_rate":
+                cc.value = f'=IFERROR({_sumif(b, "H")}/{_sumif(b, "A")},"")'
+            elif spec == "inv_pending":
+                cc.value = f"={_countblank(b, 'AE')}"
+            elif spec == "gst_tds_pct":
+                cc.value = f'=IFERROR({_sumif(b, "R")}/{_sumif(b, "H")},"")'
+            elif spec == "sd_out":
+                cc.value = f"={_sumif(b, 'T')}-{_sumif(b, 'U')}"
+            elif spec == "fp_out":
+                cc.value = f"={_sumif(b, 'W')}-{_sumif(b, 'X')}"
+            elif spec == "collection":
+                cc.value = f'=IFERROR({_sumif(b, "AC")}/{_sumif(b, "S")},"")'
+            elif spec == "inv_raised":
+                cc.value = f"={_countif(b)}-{_countblank(b, 'AE')}"
+            elif spec == "sap_posted":
+                cc.value = f"={_countif(b)}-{_countblank(b, 'AF')}"
+            else:
+                cc.value = f"={_sumif(b, spec)}"
+            cc.number_format = fmt
+            cc.font = Font(size=10, bold=(spec == "status"))
+            cc.alignment = LEFT if fmt == "@" else RIGHT
+            cc.fill = fill(pale if i % 2 else tint)
+            cc.border = BOX
+
+        t = ws.cell(row=rr, column=2 + nb)
+        first, lastm = get_column_letter(2), get_column_letter(1 + nb)
+        if tspec == "sum":
+            t.value = f"=SUM({first}{rr}:{lastm}{rr})"
+        elif tspec == "status":
+            t.value = f'=IF({total_col}{row_of[L_OUT]}<=0,"SETTLED","OUTSTANDING")'
+        elif tspec == "avg_rate":
+            t.value = (f'=IFERROR({total_col}{row_of[L_MAT]}/'
+                       f'{total_col}{row_of[L_QTY]},"")')
+        elif tspec == "gst_tds_pct":
+            t.value = (f'=IFERROR({total_col}{row_of[L_GST_TDS]}/'
+                       f'{total_col}{row_of[L_MAT]},"")')
+        elif tspec == "sd_out":
+            t.value = (f'={total_col}{row_of[L_SD_EXP]}-'
+                       f'{total_col}{row_of[L_SD_REC]}')
+        elif tspec == "fp_out":
+            t.value = (f'={total_col}{row_of[L_FP_EXP]}-'
+                       f'{total_col}{row_of[L_FP_REC]}')
+        elif tspec == "collection":
+            t.value = (f'=IFERROR({total_col}{row_of[L_RECV]}/'
+                       f'{total_col}{row_of[L_RECEIV]},"")')
+        t.number_format = fmt
+        t.font = Font(bold=True, size=10, color="1F3864")
+        t.alignment = LEFT if fmt == "@" else RIGHT
+        t.fill = fill("DDEBF7")
+        t.border = Border(left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+        for col in range(1, 2 + nb):
+            ws.cell(row=rr, column=col).border = BOX
+        ws.row_dimensions[rr].outlineLevel = 1
+        ws.row_dimensions[rr].height = 15
+
+    ws.auto_filter.ref = f"A{hdr}:{total_col}{last_row}"
+
+    def row_range(label, first_col="B"):
+        rr = row_of[label]
+        return f"{first_col}{rr}:{total_col}{rr}"
+
+    for rule in (CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                            fill=fill("FFC7CE")),
+                 CellIsRule(operator="lessThanOrEqual", formula=["0"], font=Font(bold=True, color="006100"))):
+        ws.conditional_formatting.add(row_range("Outstanding (\u20b9)"), rule)
+    for rule in (CellIsRule(operator="greaterThan", formula=["0"], fill=fill("FFE699")),):
+        ws.conditional_formatting.add(row_range("Lots pending invoice"), rule)
+    for text, font, bg in (("SETTLED", Font(bold=True, color="006100"), "C6EFCE"),
+                           ("OUTSTANDING", Font(bold=True, color="9C0006"), "FFC7CE")):
+        ws.conditional_formatting.add(
+            row_range("Payment Status"),
+            CellIsRule(operator="equal", formula=[f'"{text}"'], font=font, fill=fill(bg)))
+    ws.conditional_formatting.add(
+        row_range("Collection %"),
+        ColorScaleRule(start_type="num", start_value=0, start_color="F8696B",
+                       mid_type="num", mid_value=0.9, mid_color="FFEB84",
+                       end_type="num", end_value=1, end_color="63BE7B"))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_cols = "A:A"
+
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -1184,11 +1461,12 @@ def main(path: str) -> None:
             del wb[name]
     buyers = read_lots(wb[SRC])
     build_lot_vertical(wb, buyers)
+    build_buyer_pivot(wb, buyers)          # inserted at index 1 -> first of the views
     build_collapsible(wb, buyers)
     build_collapsible_rows(wb, buyers)
     build_ledger(wb, buyers)
     build_ledger_cols(wb, buyers)
-    wb.active = wb.sheetnames.index(LOT_VERTICAL)
+    wb.active = wb.sheetnames.index(BUYER_PIVOT)
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.

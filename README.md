@@ -7,6 +7,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
+| `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
 | `Lot-wise Vertical` | **everything downwards** | Buyer ▸ lot ▸ field, one below the other. Three fold levels: buyer → lot → field. Each buyer ends with its own `∑ TOTALS` block, the sheet ends with an all-buyers grand total. |
 | `Collapsible - Lots Across` | fields ↓ rows, lots → columns | Colour block per buyer, its lots side by side, every field down the rows. Folds by buyer and by section. Buyer index with jump links at the bottom. |
 | `Collapsible - Lots Down` | lots ↓ rows, fields → columns | Colour block per buyer, one row per lot, `∑ TOTALS` row per buyer. Folds by buyer and by column category. |
@@ -15,6 +16,30 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 
 Every figure on the five views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
+
+## Buyer Pivot — buyers across, details down
+
+| FIELD ▸ / BUYER → | AL HAMD | F R KHANS | … | WATAN | TOTAL — ALL BUYERS |
+| --- | --- | --- | --- | --- | --- |
+| Lots | 1 | 2 | … | 3 | 37 |
+| Mat. Value ₹ | 790,089 | 238,768 | … | 609,100 | 15,130,598 |
+| Total Received ₹ | … | … | … | … | … |
+| Outstanding ₹ | … | … | … | … | … |
+| Payment Status | … | … | … | … | … |
+| Quantity (total) / Avg Rate ₹ / Lots pending invoice | | | | | |
+| 11 financial lines incl. GST, TCS, both TDS, service charge, receivables | | | | | |
+| SD Expected / Received / Outstanding | | | | | |
+| FP Expected / Received / Outstanding | | | | | |
+| LPP Expected / Received | | | | | |
+| Invoices raised / SAP Docs posted | | | | | |
+| Collection % | | | | | |
+
+* Each buyer column is driven by the buyer name in **row 3** — rename that cell and the whole
+  column re-points at the new buyer.
+* `−` / `+` in the left margin folds a whole detail band (OVERVIEW, LOT INFORMATION,
+  FINANCIALS, SECURITY DEPOSIT, FINAL PAYMENT, LPP, DOCUMENT, RECOVERY).
+* Filter arrow on the FIELD column; conditional formatting on Outstanding (red/green),
+  Lots pending invoice (amber) and a red-amber-green colour scale on Collection %.
 
 ## Lot-wise Vertical — the fully vertical sheet
 
@@ -51,9 +76,9 @@ lot numbers, 3 = + section headings, 4 = every field of every lot.
 
 ```bash
 pip install openpyxl
-python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all five sheets in place
+python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all six sheets in place
 python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install formulas
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all five views against `Final Calculation Sheet` — 7,680 checks.
+all six views against `Final Calculation Sheet` — 8,102 checks.

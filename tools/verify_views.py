@@ -16,9 +16,9 @@ from collections import OrderedDict
 import openpyxl
 
 sys.path.insert(0, "tools")
-from build_buyer_lot_views import (COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER,  # noqa: E402
-                                   LEDGER_COLS, LOT_VERTICAL, SECTIONS, SRC, plan_fields,
-                                   read_lots)
+from build_buyer_lot_views import (BUYER_PIVOT, COLLAPSIBLE, COLLAPSIBLE_ROWS,  # noqa: E402
+                                   LEDGER, LEDGER_COLS, LOT_VERTICAL, PIVOT_SECTIONS,
+                                   SECTIONS, SRC, plan_fields, read_lots)
 
 import formulas  # noqa: E402
 
@@ -385,6 +385,70 @@ def main(path):
             continue
         eq(f"{LOT_VERTICAL} GRAND TOTAL {label}", V(LOT_VERTICAL, f"B{rr}"),
            sum(num(truth(scol, x)) for rs in buyers.values() for x in rs))
+
+
+    # ================= BUYER PIVOT ======================================== #
+    ws = wb[BUYER_PIVOT]
+    total_letter = openpyxl.utils.get_column_letter(2 + len(buyers))
+    col_of_buyer = {}
+    for c in ws[3]:
+        if c.column >= 2 and isinstance(c.value, str) and c.value in buyers:
+            col_of_buyer[c.column_letter] = c.value
+    print(f"buyer pivot: {len(col_of_buyer)} buyer columns, total column {total_letter}")
+    checks += 1
+    if len(col_of_buyer) != len(buyers):
+        fails.append(f"{BUYER_PIVOT}: {len(col_of_buyer)} buyer columns, expected {len(buyers)}")
+
+    def agg(spec, rows):
+        """expected value of one pivot cell, straight off the source data"""
+        if spec == "lots":
+            return len(rows)
+        if spec == "status":
+            return "SETTLED" if sum(num(truth("AD", x)) for x in rows) <= 0 else "OUTSTANDING"
+        if spec == "avg_rate":
+            q = sum(num(truth("A", x)) for x in rows)
+            return sum(num(truth("H", x)) for x in rows) / q if q else ""
+        if spec == "inv_pending":
+            return sum(1 for x in rows if truth("AE", x) is None)
+        if spec == "inv_raised":
+            return sum(1 for x in rows if truth("AE", x) is not None)
+        if spec == "sap_posted":
+            return sum(1 for x in rows if truth("AF", x) is not None)
+        if spec == "gst_tds_pct":
+            h = sum(num(truth("H", x)) for x in rows)
+            return sum(num(truth("R", x)) for x in rows) / h if h else ""
+        if spec == "sd_out":
+            return sum(num(truth("T", x)) - num(truth("U", x)) for x in rows)
+        if spec == "fp_out":
+            return sum(num(truth("W", x)) - num(truth("X", x)) for x in rows)
+        if spec == "collection":
+            s_ = sum(num(truth("S", x)) for x in rows)
+            return sum(num(truth("AC", x)) for x in rows) / s_ if s_ else ""
+        return sum(num(truth(spec, x)) for x in rows)
+
+    all_rows = [x for rs in buyers.values() for x in rs]
+    seen = 0
+    for sname, _colour, fields in PIVOT_SECTIONS:
+        for label, _fmt, spec, tspec in fields:
+            rr = None
+            for r in range(4, ws.max_row + 1):
+                if ws[f"A{r}"].value == f"      {label}":
+                    rr = r
+                    break
+            if rr is None:
+                fails.append(f"{BUYER_PIVOT}: row '{label}' not found")
+                continue
+            seen += 1
+            for letter, buyer in col_of_buyer.items():
+                eq(f"{BUYER_PIVOT}!{letter}{rr} [{buyer}/{label}]",
+                   V(BUYER_PIVOT, f"{letter}{rr}"), agg(spec, buyers[buyer]))
+            eq(f"{BUYER_PIVOT}!{total_letter}{rr} [TOTAL/{label}]",
+               V(BUYER_PIVOT, f"{total_letter}{rr}"), agg(spec, all_rows))
+    print(f"buyer pivot: {seen} detail rows checked against the source")
+    checks += 1
+    if seen != sum(len(f) for _n, _c, f in PIVOT_SECTIONS):
+        fails.append(f"{BUYER_PIVOT}: only {seen} of "
+                     f"{sum(len(f) for _n, _c, f in PIVOT_SECTIONS)} detail rows found")
 
     print(f"\nchecks run: {checks}")
     if fails:
