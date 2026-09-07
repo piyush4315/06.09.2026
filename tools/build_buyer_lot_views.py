@@ -2384,6 +2384,21 @@ def build_live_search(wb, buyers) -> None:
 
     def term_col(j):
         return get_column_letter(h_term0 + j)
+    G_ALL = MAX_TERMS + 1                           # 'nothing typed' group
+    G_REM = MAX_TERMS + 2                           # the lots that did not match
+    NGRP = G_REM                                    # group codes run 1..NGRP
+    h_grp = get_column_letter(h + 15)               # per lot: which value it fell under
+    h_rnk = get_column_letter(h + 16)               # per lot: its place in that group
+    h_out = get_column_letter(h + 17)               # per lot: the table row it lands on
+    h_src = get_column_letter(h + 18)               # per lot: its source row number
+    h_cnt = get_column_letter(h + 19)               # per group: how many lots
+    h_st = get_column_letter(h + 20)                # per group: its first table row
+    h_en = get_column_letter(h + 21)                # per group: its total row (0 = empty)
+    h_gd = get_column_letter(h + 22)                # the grand-total row
+    h_rol = get_column_letter(h + 23)               # per table row: which group total it is
+    h_big = get_column_letter(h + 24)               # per table row: 1 on the grand total
+    h_row = get_column_letter(h + 25)               # per table row: the source row shown
+    h_rem = get_column_letter(h + 26)               # per table row: 1 when it is a miss
 
     def cell(col, r):
         return f"'{SRC}'!${col}${r}"
@@ -2398,7 +2413,7 @@ def build_live_search(wb, buyers) -> None:
     widths[status_col] = 13
     for L, w in widths.items():
         ws.column_dimensions[L].width = w
-    for k in range(h, h_term0 + MAX_TERMS):
+    for k in range(h, h + 27):
         L = get_column_letter(k)
         ws.column_dimensions[L].width = 12
         ws.column_dimensions[L].hidden = True
@@ -2406,8 +2421,8 @@ def build_live_search(wb, buyers) -> None:
     # ---- title + how-to ---------------------------------------------------- #
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
-    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (comma or / = ANY of the values,   + or & = ALL "
-               "of them - the lots that do not match fade to grey)")
+    c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (results grouped by the value you typed, each "
+               "group totalled, the misses greyed in a REMAINING block, grand total at the foot)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2422,13 +2437,15 @@ def build_live_search(wb, buyers) -> None:
                "separate them with + or &:   NATIONAL + COPPER   - and a lot lights up only if it matches "
                "EVERY facet.   \u2022   the two mix:   OMKAR, STERLING + COPPER   = (OMKAR or STERLING) and "
                "COPPER.   Up to 8 values, empty ones ignored, spaces around a separator are fine.  "
-               "Every lot keeps "
-               "its own row: the ones that match stay bright and turn green, the rest fade to grey.  "
-               "Clear the box and all 37 come back to normal.   \u2022   cell F3 narrows what the text is "
-               "looked for in (lot no. + buyer + name by default).   \u2022   matching is 'contains', "
-               "not case sensitive.   \u2022   nothing here is typed in: every figure is a live link to "
-               f"'{SRC}', and the \u2211 row totals only the matching lots.   \u2022   columns "
-               f"{h_hay}..{term_col(MAX_TERMS - 1)} are hidden helpers.")
+               "\u2022   THE RESULT IS GROUPED BY THE VALUE YOU TYPED: every value gets its own block "
+               "of lots with a shaded \u2211 total row beneath it, then a greyed REMAINING block holds "
+               "the lots that did not match - with its own total - and the GRAND TOTAL of both sits at "
+               "the foot.  A lot matching two values is counted under the first one only, so the group "
+               "totals always add up to the grand total.   \u2022   clear the box and all 37 come back "
+               "in one ALL LOTS block.   \u2022   cell F3 narrows what the text is looked for in "
+               "(lot no. + buyer + name by default).   \u2022   matching is 'contains', not case "
+               "sensitive.   \u2022   nothing here is typed in: every figure is a live link to "
+               f"'{SRC}'.   \u2022   columns {h_hay}..{h_rem} are hidden helpers.")
     c.font = Font(size=9, italic=True, color="1F3864")
     c.fill = fill("FFF2CC")
     c.alignment = LEFTW
@@ -2479,8 +2496,8 @@ def build_live_search(wb, buyers) -> None:
     st.value = ('=IF($B$3="","\u25c0 type in the yellow box - a lot no., a buyer, a lot name... '
                 'several values: comma or / = ANY of them,  + or & = ALL of them",'
                 '"matching "&SUM($' + h_hit + '$5:$' + h_hit + '$' + str(4 + n) + ')&" of ' + str(n) +
-                ' lots   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   the rest are '
-                'greyed out, not hidden")')
+                ' lots   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   grouped by '
+                'the value typed, the misses greyed in the REMAINING block")')
     st.font = Font(bold=True, size=10, color="1F3864")
     st.fill = fill("DDEBF7")
     st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2519,6 +2536,7 @@ def build_live_search(wb, buyers) -> None:
     # ---- header row -------------------------------------------------------- #
     hdr = 4
     heads = ["#"] + [label_of[scol] for scol in SEARCH_COLS] + ["Payment Status"]
+    BODY = n + MAX_TERMS + 3   # lots + one total row per group + the grand total
     for i, htext in enumerate(heads):
         x = ws.cell(row=hdr, column=1 + i, value=htext)
         x.font = Font(bold=True, size=9, color="FFFFFF")
@@ -2528,24 +2546,27 @@ def build_live_search(wb, buyers) -> None:
     ws.row_dimensions[hdr].height = 44
     ws.freeze_panes = f"C{hdr + 1}"
 
-    # ---- one fixed row per lot --------------------------------------------- #
+    # ---- hidden helpers, one row per lot ------------------------------------ #
+    # h_grp says which typed value a lot fell under (1..MAX_TERMS = that term,
+    # G_ALL = the whole list when the box is empty, G_REM = it did not match);
+    # h_rnk is its place inside that group and h_out the table row it lands on.
     fmt_of = {scol: (src_ws[f"{scol}{first}"].number_format or "General") for scol in SEARCH_COLS}
+    srange = {scol: f"'{SRC}'!${scol}${first}:${scol}${last}" for scol in SEARCH_COLS}
+    first_body = hdr + 1
+    last_lot = hdr + n
+    last_body = hdr + BODY
+    lots_grp = f"${h_grp}${first_body}:${h_grp}${last_lot}"
+    lots_src = f"${h_src}${first_body}:${h_src}${last_lot}"
+    lots_out = f"${h_out}${first_body}:${h_out}${last_lot}"
+    lots_rnk = f"${h_rnk}${first_body}:${h_rnk}${last_lot}"
+    cnt_col = f"${h_cnt}$4:${h_cnt}${3 + NGRP}"
+    st_col = f"${h_st}$4:${h_st}${3 + NGRP}"
+    en_col = f"${h_en}$4:${h_en}${3 + NGRP}"
+    trm_col = f"${term_col(0)}${T_TRM}:${term_col(MAX_TERMS - 1)}${T_TRM}"
+
     for k, srow in enumerate(rows):
-        rr = hdr + 1 + k
-        a = ws.cell(row=rr, column=1, value=k + 1)
-        a.font = Font(size=9, bold=True, color="808080")
-        a.alignment = CENTER
-        a.number_format = "0"
-        for i, scol in enumerate(SEARCH_COLS):
-            x = ws.cell(row=rr, column=2 + i, value=src(scol, srow))
-            x.number_format = fmt_of[scol]
-            x.font = Font(size=10, color="333333", bold=(scol in ("F", "G")))
-            x.alignment = LEFT if fmt_of[scol] in ("General", "@") else RIGHT
-        sc = ws[f"{status_col}{rr}"]
-        sc.value = status_formula(srow)
-        sc.font = Font(size=10, bold=True)
-        sc.alignment = CENTER
-        # hidden helpers: the text this lot is searched in, and whether it hit
+        rr = first_body + k
+        ws[f"{h_src}{rr}"] = srow
         ws[f"{h_hay}{rr}"] = (
             f'=IF($F$3="Lot No.",{cell("F", srow)},'
             f'IF($F$3="Buyer",{cell("G", srow)},'
@@ -2558,67 +2579,131 @@ def build_live_search(wb, buyers) -> None:
             f'*ISNUMBER(SEARCH({trm_rng},${h_hay}{rr})))>0)'
             for g in range(1, MAX_TERMS + 1))
         ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(AND({facets}),1,0))'
-        for col in range(1, ncol + 1):
-            cc = ws.cell(row=rr, column=col)
-            cc.border = BOX
-            if k % 2:
-                cc.fill = fill("F4F9FD")
-        ws.row_dimensions[rr].height = 15
-    last_row = hdr + n
+        pick = "0"
+        for j in range(MAX_TERMS, 0, -1):
+            pick = (f'IF(AND(${term_col(j - 1)}${T_TRM}<>"",'
+                    f'ISNUMBER(SEARCH(${term_col(j - 1)}${T_TRM},${h_hay}{rr}))),'
+                    f'{j},{pick})')
+        ws[f"{h_grp}{rr}"] = (f'=IF($B$3="",{G_ALL},IF(${h_hit}{rr}=0,{G_REM},{pick}))')
+        ws[f"{h_rnk}{rr}"] = (f'=SUMPRODUCT(({lots_grp}=${h_grp}{rr})*({lots_src}<${h_src}{rr}))'
+                              f'+1')
+        ws[f"{h_out}{rr}"] = (f'=IF(INDEX({en_col},${h_grp}{rr})=0,0,'
+                              f'INDEX({st_col},${h_grp}{rr})+${h_rnk}{rr}-1)')
 
-    # ---- total row (only the lots that match) ------------------------------- #
-    tr = last_row + 1
-    hit_rng = f"${h_hit}$5:${h_hit}${last_row}"
-    a = ws.cell(row=tr, column=1, value="\u2211")
-    a.font = Font(bold=True, size=11, color="FFFFFF")
-    a.alignment = CENTER
-    for i, scol in enumerate(SEARCH_COLS):
-        L = get_column_letter(2 + i)
-        x = ws.cell(row=tr, column=2 + i)
-        if scol in ADDITIVE_SRC_COLS:
-            x.value = f'=IF(SUM({hit_rng})=0,{BLANK},SUMIF({hit_rng},1,{L}5:{L}{last_row}))'
+    # ---- the block each group occupies -------------------------------------- #
+    for g in range(1, NGRP + 1):
+        r = 3 + g
+        ws[f"{h_cnt}{r}"] = f"=COUNTIF({lots_grp},{g})"
+        ws[f"{h_st}{r}"] = (first_body if g == 1 else
+                            f'=IF(${h_cnt}{r - 1}=0,${h_st}{r - 1},${h_en}{r - 1}+1)')
+        ws[f"{h_en}{r}"] = f'=IF(${h_cnt}{r}=0,0,${h_st}{r}+${h_cnt}{r})'
+    ws[f"{h_gd}4"] = f'=IF(${h_cnt}{3 + NGRP}=0,${h_st}{3 + NGRP},${h_en}{3 + NGRP}+1)'
+
+    # ---- what every table row is: a lot, a group total, or the grand total -- #
+    for rr in range(first_body, last_body + 1):
+        ws[f"{h_rol}{rr}"] = f"=IFERROR(MATCH({rr},{en_col},0),0)"
+        ws[f"{h_big}{rr}"] = f"=IF({rr}=${h_gd}$4,1,0)"
+        ws[f"{h_row}{rr}"] = (f'=IF(OR(${h_rol}{rr}>0,${h_big}{rr}=1),0,'
+                              f'IFERROR(INDEX({lots_src},MATCH({rr},{lots_out},0)),0))')
+        ws[f"{h_rem}{rr}"] = (f'=IF(${h_row}{rr}>0,IF(INDEX({lots_grp},'
+                              f'MATCH({rr},{lots_out},0))={G_REM},1,0),'
+                              f'IF(${h_rol}{rr}={G_REM},1,0))')
+
+    # ---- the table itself --------------------------------------------------- #
+    idx = lambda scol, rr: f'INDEX({srange[scol]},${h_row}{rr}-{first - 1})'  # noqa: E731
+    for rr in range(first_body, last_body + 1):
+        row = f"${h_row}{rr}"
+        lot = f"${h_row}{rr}>0"
+        istot = f"OR(${h_big}{rr}=1,${h_rol}{rr}>0)"
+        cnt_of = (f'IF(${h_big}{rr}=1,{n},INDEX({cnt_col},${h_rol}{rr}))')
+        label = (f'IF(${h_big}{rr}=1,"GRAND TOTAL  \u2014  matching + remaining",'
+                 f'IF(${h_rol}{rr}={G_REM},"REMAINING  \u2014  did not match the search",'
+                 f'IF(${h_rol}{rr}={G_ALL},"ALL LOTS  \u2014  nothing typed in the box",'
+                 f'"GROUP "&${h_rol}{rr}&" TOTAL  \u2014  lots matching  "'
+                 f'&INDEX({trm_col},${h_rol}{rr}))))')
+        a = ws.cell(row=rr, column=1)
+        a.value = (f'=IF({lot},INDEX({lots_rnk},MATCH({rr},{lots_out},0)),'
+                   f'IF({istot},"\u2211",""))')
+        a.font = Font(size=9, bold=True, color="808080")
+        a.alignment = CENTER
+        a.number_format = "0"
+        for i, scol in enumerate(SEARCH_COLS):
+            x = ws.cell(row=rr, column=2 + i)
+            shown = f'IF({idx(scol, rr)}="","",{idx(scol, rr)})'
+            if scol == "F":                                  # Lot No. - blank on a total row
+                tail = BLANK
+            elif scol == "G":                                # Buyer -> how many lots
+                tail = f'IF({istot},{cnt_of}&" lot(s)","")'
+            elif scol == "B":                                # Lot Name -> the group label
+                tail = f'IF({istot},{label},"")'
+            elif scol in ADDITIVE_SRC_COLS:
+                tail = (f'IF(${h_big}{rr}=1,SUM({srange[scol]}),'
+                        f'IF(${h_rol}{rr}>0,SUMIFS({srange[scol]},{lots_grp},${h_rol}{rr}),'
+                        f'{BLANK}))')
+            else:
+                tail = f'IF({istot},"\u2013",{BLANK})'
+            x.value = f'=IF({lot},{shown},{tail})'
             x.number_format = fmt_of[scol]
-        else:
-            x.value = "\u2013"
-            x.number_format = "General"
-        x.font = Font(bold=True, size=10, color="FFFFFF")
-        x.alignment = LEFT if fmt_of[scol] in ("General", "@") else RIGHT
+            x.font = Font(size=10, color="333333", bold=(scol in ("F", "G")))
+            x.alignment = LEFT if fmt_of[scol] in ("General", "@") else RIGHT
+        sc = ws[f"{status_col}{rr}"]
+        sc.value = (
+            f'=IF({lot},IF({idx("AD", rr)}="","",IF({idx("AD", rr)}<=0,"SETTLED","OUTSTANDING")),'
+            f'IF({istot},IF(IF(${h_big}{rr}=1,SUM({srange["AD"]}),'
+            f'SUMIFS({srange["AD"]},{lots_grp},${h_rol}{rr}))<=0,"ALL SETTLED","OUTSTANDING"),""))')
+        sc.font = Font(size=10, bold=True)
+        sc.alignment = CENTER
+        ws.row_dimensions[rr].height = 15
+    last_row = last_lot
+    tr = last_body
     out_L = get_column_letter(2 + SEARCH_COLS.index("AD"))
-    sc = ws[f"{status_col}{tr}"]
-    sc.value = (f'=IF(SUM({hit_rng})=0,{BLANK},IF(SUMIF({hit_rng},1,{out_L}5:{out_L}{last_row})<=0,'
-                '"ALL SETTLED","OUTSTANDING"))')
-    sc.font = Font(bold=True, size=10, color="FFFFFF")
-    sc.alignment = CENTER
-    for col in range(1, ncol + 1):
-        cc = ws.cell(row=tr, column=col)
-        cc.fill = fill("1F3864")
-        cc.border = BOX
-    ws.row_dimensions[tr].height = 20
 
     # ---- conditional formatting -------------------------------------------- #
-    # Order matters: Excel gives the first matching rule the say over a property.
-    # 1 grey the misses, 2 tint the hits, 3-4 keep the money colours on a hit,
-    # 5 grey the status chip of a miss too. All of it only while a search runs.
+
+    # Order matters: Excel gives the first matching rule the say over a
+    # property. 1 fades the misses, 2-4 paint the three kinds of total row,
+    # 5 tints the lots that matched, 6 bands the rest, 7-9 keep the money
+    # colours, 10 draws the borders - which is also what hides the rows the
+    # table does not reach, since an unused row matches nothing at all.
     body_last = get_column_letter(ncol - 1)
-    miss = 'AND($B$3<>"",$' + h_hit + '5=0)'
-    hit = 'AND($B$3<>"",$' + h_hit + '5=1)'
+    tab_rng = f"A{first_body}:{body_last}{last_body}"
     ws.conditional_formatting.add(
-        f"A5:{body_last}{last_row}",
-        FormulaRule(formula=[miss], fill=fill("EDEDED"), font=Font(color="808080")))
+        tab_rng,
+        FormulaRule(formula=[f'AND($B$3<>"",${h_rem}{first_body}=1,${h_rol}{first_body}=0,'
+                             f'${h_big}{first_body}=0)'],
+                    fill=fill("EDEDED"), font=Font(color="808080")))
     ws.conditional_formatting.add(
-        f"A5:{body_last}{last_row}",
-        FormulaRule(formula=[hit], fill=fill("E2EFDA")))
+        tab_rng,
+        FormulaRule(formula=[f"${h_rol}{first_body}={G_REM}"],
+                    fill=fill("808080"), font=Font(bold=True, color="FFFFFF")))
     ws.conditional_formatting.add(
-        f"{out_L}5:{out_L}{last_row}",
+        tab_rng,
+        FormulaRule(formula=[f"${h_big}{first_body}=1"],
+                    fill=fill("375623"), font=Font(bold=True, color="FFFFFF")))
+    ws.conditional_formatting.add(
+        tab_rng,
+        FormulaRule(formula=[f"${h_rol}{first_body}>0"],
+                    fill=fill("1F3864"), font=Font(bold=True, color="FFFFFF")))
+    ws.conditional_formatting.add(
+        tab_rng,
+        FormulaRule(formula=[f'AND($B$3<>"",${h_row}{first_body}>0,${h_rem}{first_body}=0)'],
+                    fill=fill("E2EFDA")))
+    ws.conditional_formatting.add(
+        tab_rng,
+        FormulaRule(formula=[f'AND(${h_row}{first_body}>0,MOD(${h_row}{first_body},2)=0)'],
+                    fill=fill("F4F9FD")))
+    ws.conditional_formatting.add(
+        f"{out_L}{first_body}:{out_L}{last_body}",
         CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006")))
     for text, fnt, bg in (("SETTLED", Font(bold=True, color="006100"), "C6EFCE"),
                           ("OUTSTANDING", Font(bold=True, color="9C0006"), "FFC7CE")):
         ws.conditional_formatting.add(
-            f"{status_col}5:{status_col}{tr}",
+            f"{status_col}{first_body}:{status_col}{last_body}",
             CellIsRule(operator="equal", formula=[f'"{text}"'], font=fnt, fill=fill(bg)))
     ws.conditional_formatting.add(
-        f"{status_col}5:{status_col}{last_row}",
-        FormulaRule(formula=[miss], fill=fill("EDEDED"), font=Font(color="808080")))
+        f"A{first_body}:{last_col}{last_body}",
+        FormulaRule(formula=[f"OR(${h_row}{first_body}>0,${h_rol}{first_body}>0,"
+                             f"${h_big}{first_body}=1)"], border=BOX))
 
     # ---- hidden helper labels ---------------------------------------------- #
     ws[f"{h_list}3"] = "the 'search in' list"

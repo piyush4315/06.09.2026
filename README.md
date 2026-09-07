@@ -7,7 +7,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
-| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer or a lot name. **`,` or `/` = match ANY of the values** (wildcard), **`+` or `&` = match ALL of them** (faceted), and they mix: `OMKAR, STERLING + COPPER` = (OMKAR or STERLING) and COPPER. Matching lots light up green, the rest fade to grey — live as you type, no macros, and **no row ever moves or hides**. F3 narrows what the text is looked for in, H3 counts the hits, the `∑` row totals the hits only. The workbook opens here. |
+| `Live Search` | lots ↓ rows, fields → columns | **One search box (B3).** Type a lot number, part of one, a buyer or a lot name. **`,` or `/` = match ANY of the values** (wildcard), **`+` or `&` = match ALL of them** (faceted), and they mix. The result is **grouped by the value you typed**: each value gets a block of lots with a shaded `∑` total row under it, then a greyed **REMAINING** block for the misses with its own total, then the **GRAND TOTAL** of both. F3 narrows the field, H3 counts the hits. The workbook opens here. |
 | `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. **Filter button on the row-label column** (`A3:A36`) — tick the fields you want and their values stay, the rest hide. |
 | `Transposed + Field Filter` | field labels ↓ rows, values → columns | Same as `Final Calc (Transposed)` (label-only filter, no arrows on the 37 lot headers), kept as a separate tab with its own help line. |
 | `Transposed + Lot Folds` | field labels ↓ rows, values → columns | Same mirror with the lot columns **sorted by auction then buyer** and grouped: a `−` above a thin divider folds one buyer's lots, a `−` above a wide divider folds a whole auction. Auction and buyer bands above the headers. |
@@ -26,52 +26,62 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 Every figure on the fifteen views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
 
-## Live Search — type, and the misses fade out
+## Live Search — type, and the result is grouped and totalled
 
 | | A3 | B3 | | | E3 | F3 | G3 | H3 | I3 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | 🔍 SEARCH ▸ | **187** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **3 of 37** | matching 3 of 37 lots • search: 187 • in: Lot No. + Buyer + Name • the rest are greyed out, not hidden |
-| | # | Lot No. | Buyer | Lot Name | … | | | | |
-| | 1 | *1763* | *AL HAMD TRADE CORPORATION* | *SCRAP COPPER OF T/F WINDING …* | ← greyed: still on screen, just not matching | | | | |
-| | 2 | **1874** | **NATIONAL ENTERPRISES** | **Scrap of Empty oil drum** | ← matching | | | | |
-| | 3 | **1875** | **F R KHANS ENTERPRISES** | **Scrap of Copper of faulty AC compressor** | | | | | |
-| | 4 | **1876** | **F R KHANS ENTERPRISES** | **Scrap of MS (extracted from equip cage…** | | | | | |
-| | 5 | *1923* | *OMKAR STEELS* | *SCRAP ACSR CONDUCTORS …* | ← greyed again | | | | |
-| | ∑ | | | | … totals of the 3 matching lots only | | | | |
+| | 🔍 SEARCH ▸ | **OMKAR, STERLING** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **9 of 37** | matching 9 of 37 lots • search: OMKAR, STERLING • in: Lot No. + Buyer + Name • grouped by the value typed, the misses greyed in the REMAINING block |
 
-* **All 37 rows stay where they are.** Row *n* of the table is always lot *n* of
-  `Final Calculation Sheet`, so nothing jumps around while you type and the `#` column is the
-  lot's own position, 1..37. A matching lot gets a light green wash; the others keep their
-  place but fade — grey text on a grey fill — so the whole list is still readable and you can
-  still see what did *not* match.
+What the table looks like with `OMKAR, STERLING` typed in — one block per typed value, each
+with its own total, then the greyed misses, then the grand total (figures are real):
+
+| # | Lot No. | Buyer / count | Lot Name | … | Mat. Value | Outstanding |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1923 | OMKAR STEELS | SCRAP ACSR CONDUCTORS … | | 1,646,431 | −1 |
+| 2 | 2020 | OMKAR STEELS | SCRAP 80MM² AAAC EARTHWIRE | | 1,165,500 | 1 |
+| ∑ | | **2 lot(s)** | **GROUP 1 TOTAL — lots matching OMKAR** | | **2,811,931** | **0 · ALL SETTLED** |
+| 1 | 2006 | STERLING ENTERPRISES | Scrap of empty oil drums | | 17,500 | 0 |
+| … | | | *five more STERLING lots* | | | |
+| 7 | 2069 | STERLING ENTERPRISES | Scrap of 33 KV CB | | 54,000 | 50,031 |
+| ∑ | | **7 lot(s)** | **GROUP 2 TOTAL — lots matching STERLING** | | **511,966** | **300,144** |
+| 1 | *1763* | *AL HAMD TRADE CORPORATION* | *SCRAP COPPER OF T/F WINDING …* | | *790,089* | *0* |
+| … | | | *27 more greyed lots that did not match* | | | |
+| ∑ | | **28 lot(s)** | **REMAINING — did not match the search** | | **11,806,701** | **494,492** |
+| ∑ | | **37 lot(s)** | **GRAND TOTAL — matching + remaining** | | **15,130,598** | **794,636** |
+
+* **The result is grouped by the value you typed.** Each value gets its own block of lots with
+  a shaded `∑` total row beneath it — every money column is a `SUMIFS` over that value's lots,
+  and the row also says how many lots are in the group and whether they are all settled.
+* **Then a greyed REMAINING block** holds every lot that did *not* match, still fully readable,
+  with its own total row — so nothing is hidden, and you can see the size of what you filtered
+  out.
+* **Then the GRAND TOTAL** of both, which always equals the source's own totals
+  (Mat. Value 15,130,598 · Total Received 16,923,487 · Outstanding 794,636). A lot that matches
+  two values is counted under the **first** one only, so the group totals add up exactly:
+  2,811,931 + 511,966 + 11,806,701 = 15,130,598.
+* Clear the box and all 37 lots come back in a single **ALL LOTS** block under the same grand
+  total.
 * **Wildcard / match-any — separate values with `,` or `/`.** A lot matches if it hits **any**
-  of them: `1874, 1923` lights up exactly those two lots, `1874 / 1923` is the same search, and
-  `OMKAR, STERLING` lights up all 9 lots of those two buyers (2 + 7). Spaces around a separator
-  are ignored and an empty one is skipped (`187,,1923 ,` behaves like `187,1923`).
-* **Faceted / filtered — separate them with `+` or `&`.** Now a lot lights up only if it
-  matches **every** facet: `NATIONAL + drum` gives the single NATIONAL lot whose name says
-  drum (1874), `copper + 1875` gives 1875, and `NATIONAL + COPPER` gives nothing because no
-  NATIONAL lot is copper. `&` works exactly like `+`.
-* **The two mix**, which is what makes it a real faceted search — `,` binds tighter than `+`:
-  `OMKAR, STERLING + COPPER` means *(OMKAR or STERLING) and COPPER*, and
-  `STERLING + 2011 / 2006` means *STERLING and (2011 or 2006)* → lots 2006 and 2011.
-  Up to **8 values** are read; H3 then counts the hits and the `∑` row totals just those.
-* Matching is **contains**, not case sensitive, so `187` finds 1874 / 1875 / 1876, `NATIONAL`
-  finds all 14 lots of NATIONAL ENTERPRISES and NATIONAL SCRAP AND BUILDING MATERIAL
-  SUPPLIER, and `copper` finds the two lots with COPPER in the name. Clear the box and every
-  row goes back to full colour.
-* **H3** counts the hits (`3 of 37`) and the hint in **I3** echoes what you typed and where it
-  is being looked for.
-* **F3** narrows the search to one field: `Lot No.`, `Buyer`, `Lot Name`, `Bid Sheet` or
-  `Unit` (default searches lot no. + buyer + name together).
-* The `∑` row at the bottom totals **only the matching lots** (`SUMIF` over the 1/0 flags), so
-  with `187` typed it totals those three lots' material value and outstanding, and it reads
-  blank when nothing matches. `Payment Status` / `Outstanding` keep their colours on the hits.
-* No macro and nothing typed in: every visible cell is a plain link to the source row of the
-  same number. Hidden columns AK..AY do the work — AK builds the text each lot is searched in
-  from the field chosen in F3, AM holds the 1/0 match flag that both the formatting and the
-  totals read, AO is the drop-down list behind F3, AQ normalises the separators, and AR..AY
-  split the box into up to 8 terms and work out which facet each term belongs to.
+  of them: `1874, 1923` finds those two lots, `1874 / 1923` is the same search, and
+  `OMKAR, STERLING` finds all 9 lots of those two buyers (2 + 7). Spaces around a separator are
+  ignored and an empty one is skipped (`187,,1923 ,` behaves like `187,1923`).
+* **Faceted / filtered — separate them with `+` or `&`.** Now a lot matches only if it passes
+  **every** facet: `NATIONAL + drum` gives lot 1874, `copper + 1875` gives 1875, and
+  `NATIONAL + COPPER` gives nothing because no NATIONAL lot is copper. `&` works exactly like
+  `+`.
+* **The two mix** — `,` binds tighter than `+`: `OMKAR, STERLING + COPPER` means *(OMKAR or
+  STERLING) and COPPER*, and `STERLING + 2011 / 2006` means *STERLING and (2011 or 2006)* →
+  lots 2006 and 2011, which then form one group under the value `STERLING`.
+  Up to **8 values** are read.
+* Matching is **contains**, not case sensitive, so `187` finds 1874 / 1875 / 1876 and
+  `NATIONAL` finds all 14 lots of the two NATIONAL buyers. **H3** counts the hits and **I3**
+  echoes what you typed and where it was looked for. **F3** narrows the search to one field:
+  `Lot No.`, `Buyer`, `Lot Name`, `Bid Sheet` or `Unit`.
+* No macro and nothing typed in — every figure is a live `INDEX` / `SUMIFS` against
+  `Final Calculation Sheet`. Hidden columns AK..BK do the work: AK the text each lot is
+  searched in, AM the facet flag, AQ the normalised box, AR..AY the up-to-8 values and their
+  facet numbers, AZ which value each lot fell under, BA..BB its place and row in the table,
+  BD..BG the block each group occupies, and BH..BK what each drawn row is.
 
 ## Final Calc (Transposed) — the source sheet on its side
 

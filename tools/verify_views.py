@@ -15,7 +15,7 @@ import sys
 from collections import OrderedDict
 
 import openpyxl
-from openpyxl.utils import column_index_from_string, get_column_letter
+from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (ADDITIVE_SRC_COLS, ALL_BUYERS, BUYER_PIVOT,  # noqa: E402
@@ -667,114 +667,47 @@ def main(path):
            + ("" if test9 in ("is blank", "is not blank") else f" {value9}"))
 
     # ================= LIVE SEARCH ========================================= #
-    # the rows never move - a hidden flag column says which ones match, so the
-    # flags, the match count and the SUMIF totals are what get checked
+    # The hits are grouped by the value typed in the box: one block per value
+    # with its own total row, then a REMAINING block for the misses, then the
+    # grand total. The rows therefore move as you type, so what gets checked is
+    # the whole drawn table - which lot is on which row, every field on it, and
+    # each group / remaining / grand total - recomputed here from the source.
     ws = wb[LIVE_SEARCH]
     src_ws10 = wb[SRC]
     label_of10 = {scol: lbl for scol, lbl in transpose_labels(src_ws10)}
     srows10 = lot_rows(src_ws10)
     n10 = len(srows10)
     heads10 = ["#"] + [label_of10[c] for c in SEARCH_COLS] + ["Payment Status"]
-    hit_col10 = None
-    norm_col10 = None
-    term_col10 = None
-    for c in ws[3]:
-        if isinstance(c.value, str) and c.value.startswith("1 ="):
-            hit_col10 = c.column_letter
-        if isinstance(c.value, str) and c.value.startswith("the box with &"):
-            norm_col10 = c.column_letter
-        if isinstance(c.value, str) and c.value.startswith("term 1 - rows"):
-            term_col10 = c.column_letter
-    checks += 7 + 6 * MAX_TERMS + 4
+    # the builder puts the hidden helpers at ncol + 2; mirror that arithmetic
+    hh10 = 1 + len(SEARCH_COLS) + 1 + 2
+    L_HAY = get_column_letter(hh10)
+    L_HIT = get_column_letter(hh10 + 2)
+    L_GRP, L_RNK = get_column_letter(hh10 + 15), get_column_letter(hh10 + 16)
+    L_OUT, L_SRC = get_column_letter(hh10 + 17), get_column_letter(hh10 + 18)
+    L_CNT, L_ST, L_EN = (get_column_letter(hh10 + 19), get_column_letter(hh10 + 20),
+                         get_column_letter(hh10 + 21))
+    L_GD, L_ROL, L_BIG = (get_column_letter(hh10 + 22), get_column_letter(hh10 + 23),
+                          get_column_letter(hh10 + 24))
+    L_ROW, L_REM = get_column_letter(hh10 + 25), get_column_letter(hh10 + 26)
+    G_ALL10, G_REM10 = MAX_TERMS + 1, MAX_TERMS + 2
+    first10, last_lot10 = 5, 4 + n10
+    last10 = 4 + n10 + MAX_TERMS + 3
+    checks += 6
+
     if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
         fails.append(f"{LIVE_SEARCH}: header row is not {heads10[:4]}...")
     if ws["B3"].value not in (None, ""):
         fails.append(f"{LIVE_SEARCH}: the search box does not start empty ({ws['B3'].value!r})")
     if ws["F3"].value != SEARCH_ALL:
-        fails.append(f"{LIVE_SEARCH}: 'search in' starts at {ws['F3'].value!r}, expected "
-                     f"{SEARCH_ALL!r}")
+        fails.append(f"{LIVE_SEARCH}: 'search in' starts at {ws['F3'].value!r}")
     if [str(dv.sqref) for dv in ws.data_validations.dataValidation] != ["F3"]:
         fails.append(f"{LIVE_SEARCH}: dropdowns on "
                      f"{[str(dv.sqref) for dv in ws.data_validations.dataValidation]}, expected F3")
     if ws.freeze_panes != "C5":
         fails.append(f"{LIVE_SEARCH}: freeze {ws.freeze_panes}, expected C5")
-    if hit_col10 is None:
-        fails.append(f"{LIVE_SEARCH}: no hidden match-flag column found")
-    if norm_col10 is None or term_col10 is None:
-        fails.append(f"{LIVE_SEARCH}: the hidden term-split block is missing "
-                     f"(normalised box {norm_col10!r}, terms {term_col10!r})")
-    else:
-        if ws[f"{norm_col10}4"].value != '=SUBSTITUTE(SUBSTITUTE($B$3,"&","+"),"/",",")':
-            fails.append(f"{LIVE_SEARCH}!{norm_col10}4 [normalised box] is "
-                         f"{ws[f'{norm_col10}4'].value!r}")
-        c10 = column_index_from_string(term_col10)
-        for j10 in range(MAX_TERMS):
-            X = get_column_letter(c10 + j10)
-            prv = get_column_letter(c10 + j10 - 1) if j10 else None
-            want = {
-                4: (f"=${norm_col10}$4" if j10 == 0 else
-                    f'=IF(OR(${prv}$4="",${prv}$5=99999),"",MID(${prv}$4,${prv}$5+1,99999))'),
-                5: (f'=IF(${X}$4="",99999,MIN(IFERROR(FIND(",",${X}$4),99999),'
-                    f'IFERROR(FIND("+",${X}$4),99999)))'),
-                6: (f'=IF(${X}$4="","",IF(${X}$5=99999,TRIM(${X}$4),'
-                    f'TRIM(LEFT(${X}$4,${X}$5-1))))'),
-                7: f'=IF(${X}$4="","",IF(${X}$5=99999,"",MID(${X}$4,${X}$5,1)))',
-                8: (1 if j10 == 0 else f'=IF(${prv}$7="+",${prv}$8+1,${prv}$8)'),
-                9: f'=IF(${X}$6="",0,${X}$8)',
-            }
-            for r10, exp10 in want.items():
-                got10 = ws[f"{X}{r10}"].value
-                if got10 != exp10:
-                    fails.append(f"{LIVE_SEARCH}!{X}{r10} [term {j10 + 1}] is "
-                                 f"{got10!r}, expected {exp10!r}")
-    flag10 = str(ws[f"{hit_col10}5"].value or "")
-    if not flag10.startswith('=IF($B$3="",1,IF(AND('):
-        fails.append(f"{LIVE_SEARCH}: the match flag is not an AND over the facets "
-                     f"({flag10[:60]!r}...)")
-    if flag10.count("SUMPRODUCT(") != MAX_TERMS:
-        fails.append(f"{LIVE_SEARCH}: the match flag tests "
-                     f"{flag10.count('SUMPRODUCT(')} facets, expected {MAX_TERMS}")
-    rules10 = [(str(r.sqref), ru.type, tuple(ru.formula or ()))
-               for r in ws.conditional_formatting for ru in r.rules]
-    if sum(1 for _q, t, f in rules10 if t == "expression"
-           and any("$B$3" in x for x in f)) != 3:
-        fails.append(f"{LIVE_SEARCH}: expected 3 search-driven conditional formats, "
-                     f"found {rules10}")
-
-    def check_live10(vals, tag, pred):
-        """every row keeps its lot; check the flag, the count and the totals"""
-        hits = []
-        for k, srow in enumerate(srows10):
-            rr = 5 + k
-            want = 1 if pred(srow) else 0
-            if want:
-                hits.append(srow)
-            eq(f"{LIVE_SEARCH}!{hit_col10}{rr} [match flag/lot row {srow}] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"{hit_col10}{rr}")), want)
-            for i, scol in enumerate(SEARCH_COLS):
-                L = get_column_letter(2 + i)
-                t = truth(scol, srow)
-                eq(f"{LIVE_SEARCH}!{L}{rr} [{label_of10[scol]}/lot row {srow}] {tag}",
-                   vals.get((LIVE_SEARCH.upper(), f"{L}{rr}")), "" if t is None else t)
-            ad = truth("AD", srow)
-            eq(f"{LIVE_SEARCH}!AI{rr} [status/lot row {srow}] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"AI{rr}")),
-               "" if ad is None else ("SETTLED" if num(ad) <= 0 else "OUTSTANDING"))
-            eq(f"{LIVE_SEARCH}!A{rr} [row #/lot row {srow}] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"A{rr}")), k + 1)
-        eq(f"{LIVE_SEARCH}!H3 [matches] {tag}", vals.get((LIVE_SEARCH.upper(), "H3")),
-           f"{len(hits)} of {n10}")
-        for i, scol in enumerate(SEARCH_COLS):
-            if scol not in ADDITIVE_SRC_COLS:
-                continue
-            L = get_column_letter(2 + i)
-            eq(f"{LIVE_SEARCH}!{L}42 [{label_of10[scol]}/TOTAL] {tag}",
-               vals.get((LIVE_SEARCH.upper(), f"{L}42")),
-               sum(num(truth(scol, x)) for x in hits))
-        return hits
-
-    hits10 = check_live10(vals, "[empty search]", lambda r: True)
-    print(f"live search: empty box matches all {len(hits10)} lots, rows stay put")
+    if not str(ws[f"{L_HIT}5"].value or "").startswith('=IF($B$3="",1,IF(AND('):
+        fails.append(f"{LIVE_SEARCH}: {L_HIT}5 is not the facet flag "
+                     f"({str(ws[f'{L_HIT}5'].value)[:50]!r})")
 
     def parse10(text):
         """'a, b + c' -> [(a,1), (b,1), (c,2)]: ',' and '/' OR, '+' and '&' AND"""
@@ -790,6 +723,139 @@ def main(path):
                 cur += ch
         return out
 
+    def slots10(text):
+        """the box as the sheet splits it: one entry per slot, empties kept"""
+        out, cur = [], ""
+        for ch in text.replace("&", "+").replace("/", ","):
+            if ch in ",+":
+                out.append(cur.strip())
+                cur = ""
+            else:
+                cur += ch
+        out.append(cur.strip())
+        return out[:MAX_TERMS]
+
+    def layout10(text, hays):
+        """which lots fall under which typed value, and the blocks they draw"""
+        pairs = parse10(text)
+        facets = sorted({f for _t, f in pairs})
+        terms = slots10(text)
+        memb = {g: [] for g in range(1, G_REM10 + 1)}
+        for i, hay in enumerate(hays):
+            hu = hay.upper()
+            hit = all(any(t.upper() in hu for t, f in pairs if f == g) for g in facets)
+            if text == "":
+                memb[G_ALL10].append(i)
+            elif not hit:
+                memb[G_REM10].append(i)
+            else:
+                g = next((k + 1 for k, t in enumerate(terms) if t and t.upper() in hu), G_REM10)
+                memb[g].append(i)
+        cnt = {g: len(v) for g, v in memb.items()}
+        st, en = {}, {}
+        for g in range(1, G_REM10 + 1):
+            st[g] = first10 if g == 1 else (st[g - 1] if cnt[g - 1] == 0 else en[g - 1] + 1)
+            en[g] = 0 if cnt[g] == 0 else st[g] + cnt[g]
+        grand = st[G_REM10] if cnt[G_REM10] == 0 else en[G_REM10] + 1
+        return memb, cnt, st, en, grand, terms
+
+    def hay10(srow, sin):
+        if sin == "Lot No.":
+            cols = ("F",)
+        elif sin == "Buyer":
+            cols = ("G",)
+        elif sin == "Lot Name":
+            cols = ("B",)
+        elif sin == "Bid Sheet":
+            cols = ("D",)
+        elif sin == "Unit":
+            cols = ("E",)
+        else:
+            cols = ("F", "G", "B")
+        return " ".join(str(truth(c, srow) or "") for c in cols)
+
+    def check_live10(vals, tag, text, sin):
+        S = LIVE_SEARCH.upper()
+        hays = [hay10(r, sin) for r in srows10]
+        memb, cnt, st, en, grand, terms = layout10(text, hays)
+        role_of = {en[g]: g for g in range(1, G_REM10 + 1) if cnt[g]}
+        row_of = {}
+        for g, who in memb.items():
+            for k, i in enumerate(who):
+                row_of[st[g] + k] = (i, k + 1, g)
+        hits = sum(len(v) for g, v in memb.items() if g != G_REM10)
+        eq(f"{LIVE_SEARCH}!H3 [matches] {tag}", vals.get((S, "H3")), f"{hits} of {n10}")
+        eq(f"{LIVE_SEARCH}!{L_GD}4 [grand-total row] {tag}", vals.get((S, f"{L_GD}4")), grand)
+        for g in range(1, G_REM10 + 1):
+            eq(f"{LIVE_SEARCH}!{L_CNT}{3 + g} [group {g} count] {tag}",
+               vals.get((S, f"{L_CNT}{3 + g}")), cnt[g])
+            eq(f"{LIVE_SEARCH}!{L_EN}{3 + g} [group {g} total row] {tag}",
+               vals.get((S, f"{L_EN}{3 + g}")), en[g])
+        for rr in range(first10, last10 + 1):
+            want_role = role_of.get(rr, 0)
+            want_big = 1 if rr == grand else 0
+            here = row_of.get(rr)
+            eq(f"{LIVE_SEARCH}!{L_ROL}{rr} [row role] {tag}", vals.get((S, f"{L_ROL}{rr}")),
+               want_role)
+            eq(f"{LIVE_SEARCH}!{L_BIG}{rr} [grand row] {tag}", vals.get((S, f"{L_BIG}{rr}")),
+               want_big)
+            eq(f"{LIVE_SEARCH}!{L_ROW}{rr} [source row shown] {tag}",
+               vals.get((S, f"{L_ROW}{rr}")), srows10[here[0]] if here else 0)
+            eq(f"{LIVE_SEARCH}!{L_REM}{rr} [greyed] {tag}", vals.get((S, f"{L_REM}{rr}")),
+               1 if (here and here[2] == G_REM10) or want_role == G_REM10 else 0)
+            if here:
+                i, rank, g = here
+                srow = srows10[i]
+                eq(f"{LIVE_SEARCH}!A{rr} [place in group] {tag}", vals.get((S, f"A{rr}")), rank)
+                for scol in SEARCH_COLS:
+                    L = get_column_letter(2 + SEARCH_COLS.index(scol))
+                    t = truth(scol, srow)
+                    eq(f"{LIVE_SEARCH}!{L}{rr} [{label_of10[scol]}/{srow}] {tag}",
+                       vals.get((S, f"{L}{rr}")), "" if t is None else t)
+                ad = truth("AD", srow)
+                eq(f"{LIVE_SEARCH}!AI{rr} [status/{srow}] {tag}", vals.get((S, f"AI{rr}")),
+                   "" if ad is None else ("SETTLED" if num(ad) <= 0 else "OUTSTANDING"))
+            else:
+                # a group / remaining / grand total row, or a row the table does
+                # not reach - which the sheet leaves completely empty
+                used = bool(want_role or want_big)
+                who = [i for i in range(n10)] if want_big else memb.get(want_role, [])
+                many = n10 if want_big else cnt.get(want_role, 0)
+                if not used:
+                    label10 = ""
+                elif want_big:
+                    label10 = "GRAND TOTAL  \u2014  matching + remaining"
+                elif want_role == G_REM10:
+                    label10 = "REMAINING  \u2014  did not match the search"
+                elif want_role == G_ALL10:
+                    label10 = "ALL LOTS  \u2014  nothing typed in the box"
+                else:
+                    label10 = (f"GROUP {want_role} TOTAL  \u2014  lots matching  "
+                               f"{terms[want_role - 1]}")
+                eq(f"{LIVE_SEARCH}!A{rr} [total marker] {tag}", vals.get((S, f"A{rr}")),
+                   "\u2211" if used else "")
+                for scol in SEARCH_COLS:
+                    L = get_column_letter(2 + SEARCH_COLS.index(scol))
+                    if scol == "G":
+                        want = f"{many} lot(s)" if used else ""
+                    elif scol == "B":
+                        want = label10
+                    elif scol == "F":
+                        want = ""
+                    elif scol in ADDITIVE_SRC_COLS:
+                        want = sum(num(truth(scol, srows10[i])) for i in who) if used else ""
+                    else:
+                        want = "\u2013" if used else ""
+                    eq(f"{LIVE_SEARCH}!{L}{rr} [{label_of10[scol]}/TOTAL] {tag}",
+                       vals.get((S, f"{L}{rr}")), want)
+                out = sum(num(truth("AD", srows10[i])) for i in who)
+                eq(f"{LIVE_SEARCH}!AI{rr} [status/TOTAL] {tag}", vals.get((S, f"AI{rr}")),
+                   ("ALL SETTLED" if out <= 0 else "OUTSTANDING") if used else "")
+        return hits
+
+    hits10 = check_live10(vals, "[empty search]", "", None)
+    print(f"live search: empty box -> all {n10} lots in one ALL LOTS block, grand total below")
+
     cases10 = (("187", None), ("NATIONAL", None), ("OMKAR", "Buyer"),
                ("1874, 1923", None), ("187,,1923 ,", None), ("OMKAR, STERLING", "Buyer"),
                ("copper + 1875", None), ("STERLING + 2011 / 2006", None))
@@ -802,21 +868,9 @@ def main(path):
             wb5[LIVE_SEARCH]["F3"] = sin10
         wb5.save(tmp)
         vals5 = calculate(tmp)
-        pairs10 = parse10(text10)
-        facets10 = sorted({f for _t, f in pairs10})
-        if sin10 == "Buyer":
-            pred10 = lambda r, ps=pairs10, fs=facets10: all(  # noqa: E731
-                any(t.upper() in str(truth("G", r) or "").upper() for t, f in ps if f == g)
-                for g in fs)
-        else:
-            pred10 = lambda r, ps=pairs10, fs=facets10: all(  # noqa: E731
-                any(t.upper() in " ".join(str(truth(c, r) or "")
-                                          for c in ("F", "G", "B")).upper()
-                    for t, f in ps if f == g)
-                for g in fs)
-        got10 = check_live10(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]", pred10)
-        print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {len(got10)} match(es), "
-              f"the other {n10 - len(got10)} rows greyed")
+        got10 = check_live10(vals5, f"[search {text10!r}/{sin10 or SEARCH_ALL}]", text10, sin10)
+        print(f"live search: {text10!r} in {sin10 or SEARCH_ALL} -> {got10} match(es) grouped, "
+              f"{n10 - got10} in the remaining block")
 
     # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
     # four sheets share this layout; the folded ones simply reorder the columns
