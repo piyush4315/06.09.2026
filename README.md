@@ -7,6 +7,7 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 | Sheet | Layout | What it is |
 | --- | --- | --- |
 | `Final Calculation Sheet` | — | The original working sheet. Untouched — the single source of truth. |
+| `Final Calc (Transposed)` | **field labels ↓ rows**, values → columns | A one-for-one mirror of `Final Calculation Sheet` turned on its side: the 33 captions of row 3 down column A in the same order, one column per lot, and the source's own total row as the last column. Header colour = auction. |
 | `Buyer Pivot` | **buyers → columns**, details ↓ rows | One column per buyer, 30 detail rows down the side, `TOTAL — ALL BUYERS` at the end. Every cell a live SUMIF/COUNTIF on the buyer name in row 3. |
 | `Lot-wise Vertical` | **everything downwards** | Buyer ▸ lot ▸ field, one below the other. Three fold levels: buyer → lot → field. Each buyer ends with its own `∑ TOTALS` block, the sheet ends with an all-buyers grand total. |
 | `Collapsible - Lots Across` | fields ↓ rows, lots → columns | Colour block per buyer, its lots side by side, every field down the rows. Folds by buyer and by section. Buyer index with jump links at the bottom. |
@@ -16,6 +17,24 @@ MSTC combined bid sheet (auctions 21977, 21978, 21979, 21980).
 
 Every figure on the five views is a **live formula** pointing at `Final Calculation Sheet` —
 nothing is typed in, so they all update the moment the source sheet changes.
+
+## Final Calc (Transposed) — the source sheet on its side
+
+Exactly the same fields in exactly the same order, nothing added or dropped:
+
+| FIELD (row 3 of the source) ▸ | 1763 | 1874 | … | 2091 | TOTAL (src row 41) |
+| --- | --- | --- | --- | --- | --- |
+| Quantity | 669 | 270 | … | 3 | |
+| Lot Name | SCRAP COPPER OF T/F WINDING… | Scrap of Empty oil drum | … | | |
+| Rate / Bid Sheet / Unit / Lot No. / Buyer | | | | | |
+| Mat. Value … Doc./Invoice Date | | | | | 15,130,598 … |
+
+* Every cell is `=IF('Final Calculation Sheet'!$H$4="","",'Final Calculation Sheet'!$H$4)` —
+  the two sheets can never disagree, and blanks stay blank instead of turning into zeros.
+* The source caption `Date of Receipt` heads two columns (SD and FP), so those two rows are
+  labelled `Date of Receipt (col V)` and `Date of Receipt (col Y)`.
+* Number formats are copied from the source, column A is frozen, and the `▼` on the FIELD
+  column filters which rows show.
 
 ## Buyer Pivot — buyers across, details down
 
@@ -76,9 +95,9 @@ lot numbers, 3 = + section headings, 4 = every field of every lot.
 
 ```bash
 pip install openpyxl
-python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all six sheets in place
+python3 tools/build_buyer_lot_views.py 06.09.2026.xlsx   # rebuild all seven sheets in place
 python3 tools/verify_views.py 06.09.2026.xlsx            # needs: pip install formulas
 ```
 
 `verify_views.py` recalculates the workbook with a formula engine and checks every cell of
-all six views against `Final Calculation Sheet` — 8,102 checks.
+all seven views against `Final Calculation Sheet` — 9,358 checks.

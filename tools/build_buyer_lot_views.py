@@ -41,7 +41,9 @@ LEDGER = "Ledger Filter - Lots Down"             # lots as rows, fields as colum
 LEDGER_COLS = "Ledger Filter - Lots Across"      # fields as rows, lots as columns
 LOT_VERTICAL = "Lot-wise Vertical"               # buyer > lot > fields, all downwards
 BUYER_PIVOT = "Buyer Pivot"                      # buyers across, every detail down
-ALL_VIEWS = (BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS, LEDGER, LEDGER_COLS)
+TRANSPOSED = "Final Calc (Transposed)"           # the source sheet, turned on its side
+ALL_VIEWS = (TRANSPOSED, BUYER_PIVOT, LOT_VERTICAL, COLLAPSIBLE, COLLAPSIBLE_ROWS,
+             LEDGER, LEDGER_COLS)
 # sheets from the first revision, renamed since - dropped so they do not linger
 LEGACY_VIEWS = ("Buyer Collapsible View", "Lot Ledger (Filter)")
 FIRST_DATA_ROW = 4          # first lot row on the source sheet
@@ -1452,6 +1454,143 @@ def build_buyer_pivot(wb, buyers):
 
 
 
+# --------------------------------------------------------------------------- #
+# sheet 7 - 'Final Calculation Sheet' turned on its side: labels down the rows,
+#           one column per lot, exactly the same fields in the same order
+# --------------------------------------------------------------------------- #
+def transpose_labels(src_ws):
+    """(source column letter, row label) for every column of the source header.
+
+    The source repeats some captions ('Date of Receipt' heads both the SD and the
+    FP date column), so repeated captions get their source column appended.
+    """
+    raw = []
+    for c in src_ws[3]:
+        if c.value in (None, ""):
+            continue
+        raw.append((c.column_letter, " ".join(str(c.value).split()).strip()))
+    seen = {}
+    for _letter, label in raw:
+        seen[label] = seen.get(label, 0) + 1
+    return [(letter, label if seen[label] == 1 else f"{label} (col {letter})")
+            for letter, label in raw]
+
+
+def lot_rows(src_ws):
+    """source rows that hold a lot (a lot number in column F)."""
+    return [r for r in range(FIRST_DATA_ROW, src_ws.max_row + 1)
+            if src_ws[f"F{r}"].value not in (None, "")]
+
+
+def build_transposed(wb):
+    """A mirror image of 'Final Calculation Sheet': labels down, values across."""
+    src_ws = wb[SRC]
+    fields = transpose_labels(src_ws)
+    rows = lot_rows(src_ws)
+    total_src = rows[-1] + 1                    # the source's own SUM row
+    ws = wb.create_sheet(TRANSPOSED, 1)
+    n = len(rows)
+    last_col = get_column_letter(2 + n)
+
+    ws.sheet_properties.tabColor = "808080"
+    ws.sheet_view.showGridLines = False
+    ws.sheet_format.outlineLevelRow = 0
+    ws.sheet_format.outlineLevelCol = 0
+    ws.column_dimensions["A"].width = 34
+    for i in range(n + 1):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 14.5
+
+    ws.merge_cells(f"A1:{last_col}1")
+    c = ws["A1"]
+    c.value = ("MSTC LIMITED  \u2022  FINAL CALCULATION SHEET, TRANSPOSED   "
+               "(field labels \u2193 rows  |  values \u2192 columns)")
+    c.font = Font(bold=True, size=15, color="FFFFFF")
+    c.fill = fill("1F3864")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    ws.row_dimensions[1].height = 30
+
+    ws.merge_cells(f"A2:{last_col}2")
+    c = ws["A2"]
+    c.value = (f"HOW TO USE  \u25b6  a one-for-one copy of '{SRC}' turned on its side: the "
+               f"{len(fields)} field captions of row 3 run down column A in the same order, one column per "
+               f"lot, and the last column is the source's own total row (row {total_src})   \u2022   every cell "
+               "is a live link, so the two sheets can never disagree   \u2022   the header colour of a lot "
+               "column is its auction: " + "  \u2022  ".join(
+                   f"{b} = bid sheet {a}" for a, b in
+                   sorted({(src_ws[f'D{r}'].value, THEMES[i % len(THEMES)][0])
+                           for i, r in enumerate(rows)})) +
+               "   \u2022   filter with the \u25bc arrow on the FIELD column")
+    c.font = Font(size=9, italic=True, color="1F3864")
+    c.fill = fill("FFF2CC")
+    c.alignment = LEFTW
+    ws.row_dimensions[2].height = 32
+
+    # header row: one column per lot + the source total column --------------- #
+    hdr = 3
+    c = ws.cell(row=hdr, column=1, value="FIELD (row 3 of the source)  \u25b8  |  LOT \u2192")
+    c.font = Font(bold=True, size=10, color="FFFFFF")
+    c.fill = fill("404040")
+    c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+    auction_colour = {}
+    for i, srow in enumerate(rows):
+        bid = src_ws[f"D{srow}"].value
+        auction_colour.setdefault(bid, THEMES[len(auction_colour) % len(THEMES)][0])
+        cc = ws.cell(row=hdr, column=2 + i, value=src("F", srow))
+        cc.number_format = KIND_FMT["num0"]
+        cc.font = Font(bold=True, size=10, color="FFFFFF")
+        cc.fill = fill(auction_colour[bid])
+        cc.alignment = CENTER
+    cc = ws.cell(row=hdr, column=2 + n, value=f"TOTAL (src row {total_src})")
+    cc.font = Font(bold=True, size=10, color="FFFFFF")
+    cc.fill = fill("1F3864")
+    cc.alignment = CENTER
+    for col in range(1, 3 + n):
+        ws.cell(row=hdr, column=col).border = Border(left=THIN, right=THIN, top=MED, bottom=MED)
+    ws.row_dimensions[hdr].height = 30
+    ws.freeze_panes = f"B{hdr + 1}"
+
+    # one row per source field ------------------------------------------------ #
+    r = hdr + 1
+    for k, (scol, label) in enumerate(fields):
+        a = ws.cell(row=r, column=1, value=label)
+        a.font = Font(bold=True, size=10, color="1F3864")
+        a.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        a.fill = fill("DDEBF7" if k % 2 else "F4F9FD")
+        fmt = src_ws[f"{scol}{rows[0]}"].number_format or "General"
+        for i, srow in enumerate(rows):
+            cc = ws.cell(row=r, column=2 + i, value=src(scol, srow))
+            cc.number_format = fmt
+            cc.font = Font(size=10, color="333333")
+            cc.alignment = LEFT if fmt in ("General", "@") else RIGHT
+            if i % 2:
+                cc.fill = fill("F7F7F7")
+        t = ws.cell(row=r, column=2 + n, value=src(scol, total_src))
+        t.number_format = fmt
+        t.font = Font(bold=True, size=10, color="1F3864")
+        t.alignment = LEFT if fmt in ("General", "@") else RIGHT
+        t.fill = fill("DDEBF7")
+        for col in range(1, 3 + n):
+            ws.cell(row=r, column=col).border = BOX
+        ws.cell(row=r, column=2 + n).border = Border(
+            left=Side(style="thin", color="1F4E79"), right=THIN, top=THIN, bottom=THIN)
+        ws.row_dimensions[r].height = 15
+        r += 1
+
+    ws.auto_filter.ref = f"A{hdr}:{last_col}{r - 1}"
+    out_row = hdr + 1 + [lbl for _l, lbl in fields].index("Outstanding")
+    ws.conditional_formatting.add(
+        f"B{out_row}:{get_column_letter(1 + n)}{out_row}",
+        CellIsRule(operator="greaterThan", formula=["0"], font=Font(bold=True, color="9C0006"),
+                   fill=fill("FFC7CE")))
+
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_cols = "A:A"
+
+
+
 def main(path: str) -> None:
     wb = load_workbook(path)
     if SRC not in wb.sheetnames:
@@ -1461,12 +1600,13 @@ def main(path: str) -> None:
             del wb[name]
     buyers = read_lots(wb[SRC])
     build_lot_vertical(wb, buyers)
-    build_buyer_pivot(wb, buyers)          # inserted at index 1 -> first of the views
+    build_buyer_pivot(wb, buyers)
+    build_transposed(wb)                   # built last, inserted at index 1 -> first view
     build_collapsible(wb, buyers)
     build_collapsible_rows(wb, buyers)
     build_ledger(wb, buyers)
     build_ledger_cols(wb, buyers)
-    wb.active = wb.sheetnames.index(BUYER_PIVOT)
+    wb.active = wb.sheetnames.index(TRANSPOSED)
     # openpyxl serialises sheetFormatPr before the column outline levels, so it
     # never records outlineLevelCol; prime it so Excel draws the column group
     # buttons in the outline symbol area.

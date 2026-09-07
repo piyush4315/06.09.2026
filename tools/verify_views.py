@@ -18,7 +18,8 @@ import openpyxl
 sys.path.insert(0, "tools")
 from build_buyer_lot_views import (BUYER_PIVOT, COLLAPSIBLE, COLLAPSIBLE_ROWS,  # noqa: E402
                                    LEDGER, LEDGER_COLS, LOT_VERTICAL, PIVOT_SECTIONS,
-                                   SECTIONS, SRC, plan_fields, read_lots)
+                                   SECTIONS, SRC, TRANSPOSED, lot_rows, plan_fields,
+                                   read_lots, transpose_labels)
 
 import formulas  # noqa: E402
 
@@ -449,6 +450,44 @@ def main(path):
     if seen != sum(len(f) for _n, _c, f in PIVOT_SECTIONS):
         fails.append(f"{BUYER_PIVOT}: only {seen} of "
                      f"{sum(len(f) for _n, _c, f in PIVOT_SECTIONS)} detail rows found")
+
+
+    # ================= TRANSPOSED MIRROR OF THE SOURCE ==================== #
+    from openpyxl.utils import get_column_letter as _gcl
+    src_ws = wb[SRC]
+    fields7 = transpose_labels(src_ws)
+    srows = lot_rows(src_ws)
+    ws = wb[TRANSPOSED]
+    total_letter = _gcl(2 + len(srows))
+    row_of_label = {}
+    for r in range(4, ws.max_row + 1):
+        v = ws[f"A{r}"].value
+        if isinstance(v, str) and v.strip():
+            row_of_label[v.strip()] = r
+    lot_col_of_row = {}
+    for c in ws[3]:
+        if c.column >= 2 and isinstance(c.value, str) and "$F$" in c.value:
+            lot_col_of_row[int(re.search(r"\$F\$(\d+)", c.value).group(1))] = c.column_letter
+    print(f"transposed: {len(row_of_label)} field rows, {len(lot_col_of_row)} lot columns, "
+          f"total column {total_letter} (source row {srows[-1] + 1})")
+    checks += 2
+    if len(row_of_label) != len(fields7):
+        fails.append(f"{TRANSPOSED}: {len(row_of_label)} field rows, expected {len(fields7)}")
+    if sorted(lot_col_of_row) != sorted(srows):
+        fails.append(f"{TRANSPOSED}: lot columns {sorted(lot_col_of_row)} != source rows {sorted(srows)}")
+    for scol, label in fields7:
+        rr = row_of_label.get(label)
+        if rr is None:
+            fails.append(f"{TRANSPOSED}: field row '{label}' missing")
+            continue
+        for srow in srows:
+            letter = lot_col_of_row[srow]
+            t = truth(scol, srow)
+            eq(f"{TRANSPOSED}!{letter}{rr} [{label}/lot row {srow}]",
+               V(TRANSPOSED, f"{letter}{rr}"), "" if t is None else t)
+        t = truth(scol, srows[-1] + 1)
+        eq(f"{TRANSPOSED}!{total_letter}{rr} [{label}/source total row]",
+           V(TRANSPOSED, f"{total_letter}{rr}"), "" if t is None else t)
 
     print(f"\nchecks run: {checks}")
     if fails:
