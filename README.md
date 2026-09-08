@@ -32,6 +32,19 @@ nothing is typed in, so they all update the moment the source sheet changes.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | | 🔍 SEARCH ▸ | **OMKAR, STERLING** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **9 of 37** | matching 9 of 37 lots • search: OMKAR, STERLING • in: Lot No. + Buyer + Name • grouped by the value typed, the misses greyed in REMAINING, TOTAL MATCHED totals the hits |
 
+**Row 4 adds a filter box above every column header** — the same live, contains, match-any
+search, but scoped to a single column:
+
+| | A4 | B4 | C4 | D4 | E4 | … | AH4 | AI4 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | ▼ | | **STERLING** | | | | | |
+
+Type `STERLING` under **Buyer** and only its 7 lots stay lit; add `2006` under **Lot No.** and
+just that one lot does. A `,` or `/` inside a box means *any of these* (up to 4 values), and a
+lot has to pass **every** filled-in box. They work on top of the big box in B3 — `187` in B3
+plus `NATIONAL` under Buyer gives the single lot that is both — and whatever does not pass is
+greyed in REMAINING exactly as before, so the totals still add up.
+
 What the table looks like with `OMKAR, STERLING` typed in — one block per typed value, each
 with its own total, then the total of what you found, then the greyed misses, then the grand
 total of everything (figures are real):
@@ -73,6 +86,11 @@ total of everything (figures are real):
   of them: `1874, 1923` finds those two lots, `1874 / 1923` is the same search, and
   `OMKAR, STERLING` finds all 9 lots of those two buyers (2 + 7). Spaces around a separator are
   ignored and an empty one is skipped (`187,,1923 ,` behaves like `187,1923`).
+* **Per-column filter boxes in row 4** narrow one column at a time: `OMKAR, STERLING` under
+  Buyer gives the same 9 lots, `STERLING` under Buyer **and** `2006` under Lot No. gives 1, and
+  `copper / drum` under Lot Name gives 6, and `OUTSTANDING` under **Payment Status** gives the
+  9 lots still owed money (`SETTLED / OUTSTANDING` gives all 37). Empty box = that column is not
+  filtered. Numbers and dates are matched as the text they display.
 * **Faceted / filtered — separate them with `+` or `&`.** Now a lot matches only if it passes
   **every** facet: `NATIONAL + drum` gives lot 1874, `copper + 1875` gives 1875, and
   `NATIONAL + COPPER` gives nothing because no NATIONAL lot is copper. `&` works exactly like

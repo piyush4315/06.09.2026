@@ -27,6 +27,7 @@ import sys
 from collections import OrderedDict
 
 from openpyxl import load_workbook
+from openpyxl.comments import Comment
 from openpyxl.formatting.rule import (CellIsRule, ColorScaleRule, DataBarRule,
                                       FormulaRule)
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -1859,7 +1860,6 @@ def build_pick_buyer(wb, buyers) -> None:
     st.value = ('=IF($B$3="","\u25c0 pick a buyer in B3","showing "&COUNT($B$4:'
                 f'${get_column_letter(1 + width)}$4)&" lot(s) of "&'
                 f'COUNTIF({grng},$B$3)&" for "&$B$3)')
-    st.font = Font(bold=True, size=10, color="1F3864")
     st.fill = fill("DDEBF7")
     st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
     ws.row_dimensions[3].height = 26
@@ -2381,6 +2381,8 @@ def build_live_search(wb, buyers) -> None:
     ncol = 1 + len(SEARCH_COLS) + 1               # '#' + fields + status
     last_col = get_column_letter(ncol)
     status_col = last_col
+    hdr = 5                                       # row 4 is the per-column filter row
+    frow = hdr - 1                                # ... the row of per-column filter boxes
 
     h = ncol + 2                                  # hidden helper block
     h_hay = get_column_letter(h)
@@ -2411,6 +2413,14 @@ def build_live_search(wb, buyers) -> None:
     # h_gd holds two addresses: row 4 = the row totalling the lots that matched,
     # row 5 = the grand total of matching + remaining directly beneath it.
     MT_ROW, GD_ROW = f"${h_gd}$4", f"${h_gd}$5"
+    # --- the per-column filter boxes in row 4 -------------------------------- #
+    N_CT = 4                                        # values one column box matches against
+    CT_R0 = 5                                       # their parsed values live in rows 5..8
+    N_BOX = len(SEARCH_COLS) + 1                    # ... plus one for Payment Status
+    h_ct0 = h + 28                                  # one hidden column per box
+    h_cf0 = h_ct0 + N_BOX                           # 4 hidden columns: the combined verdict
+    N_HIDE = 28 + N_BOX + 4
+    COLN = f"${h_norm}$10"                          # how many column boxes are filled in
 
     def cell(col, r):
         return f"'{SRC}'!${col}${r}"
@@ -2425,7 +2435,7 @@ def build_live_search(wb, buyers) -> None:
     widths[status_col] = 13
     for L, w in widths.items():
         ws.column_dimensions[L].width = w
-    for k in range(h, h + 28):
+    for k in range(h, h + N_HIDE):
         L = get_column_letter(k)
         ws.column_dimensions[L].width = 12
         ws.column_dimensions[L].hidden = True
@@ -2502,18 +2512,21 @@ def build_live_search(wb, buyers) -> None:
     lab.fill = fill("404040")
     lab.alignment = Alignment(horizontal="right", vertical="center")
     cnt = ws["H3"]
-    cnt.value = f'=SUM(${h_hit}$5:${h_hit}${4 + n})&" of {n}"'
+    cnt.value = f'=SUM(${h_hit}${hdr + 1}:${h_hit}${hdr + n})&" of {n}"'
     cnt.font = Font(bold=True, size=12, color="1F3864")
     cnt.fill = fill("DDEBF7")
     cnt.alignment = CENTER
     cnt.border = Border(left=MED, right=MED, top=MED, bottom=MED)
     ws.merge_cells(f"I3:{last_col}3")
     st = ws["I3"]
-    st.value = ('=IF($B$3="","\u25c0 type in the yellow box - a lot no., a buyer, a lot name... '
-                'several values: comma or / = ANY of them,  + or & = ALL of them",'
-                '"matching "&SUM($' + h_hit + '$5:$' + h_hit + '$' + str(4 + n) + ')&" of ' + str(n) +
-                ' lots   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   grouped by '
-                'the value typed, the misses greyed in REMAINING, TOTAL MATCHED totals the hits")')
+    prompt = ("\u25c0 type in the yellow box - a lot no., a buyer, a lot name... several "
+              "values: comma or / = ANY of them,  + or & = ALL of them.  \u2022   THE YELLOW BOXES IN "
+              "ROW 4 filter one column at a time - type in any of them, on top of this "
+              "box, and a lot has to pass every box you fill in")
+    st.value = (f'=IF($B$3="","{prompt}",'
+                f'"matching "&SUM(${h_hit}${hdr + 1}:${h_hit}${hdr + n})&" of {n} lots'
+                f'   \u2022   search: "&$B$3&"   \u2022   in: "&$F$3&"   \u2022   grouped by '
+                f'the value typed, the misses greyed in REMAINING, TOTAL MATCHED totals the hits")')
     st.font = Font(bold=True, size=10, color="1F3864")
     st.fill = fill("DDEBF7")
     st.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2549,8 +2562,59 @@ def build_live_search(wb, buyers) -> None:
     grp_rng = f"${term_col(0)}${G_TRM}:${term_col(MAX_TERMS - 1)}${G_TRM}"
     trm_rng = f"${term_col(0)}${T_TRM}:${term_col(MAX_TERMS - 1)}${T_TRM}"
 
+    # ---- the per-column filter boxes (row 4) -------------------------------- #
+    # One small box above every column header. Type in it and only the lots
+    # holding that text in THAT column stay lit; fill in several and a lot has
+    # to pass all of them. ',' and '/' separate alternatives (match any), up to
+    # N_CT of them; these boxes work on top of the big search box in B3.
+    lab = ws[f"A{frow}"]
+    lab.value = "\u25bc"
+    lab.font = Font(bold=True, size=10, color="FFFFFF")
+    lab.fill = fill("404040")
+    lab.alignment = CENTER
+    for i in range(N_BOX):                      # column 2 + 33 is Payment Status
+        x = ws.cell(row=frow, column=2 + i)
+        x.value = ""
+        x.font = Font(size=9, bold=True, color="1F3864")
+        x.fill = fill("FFFF00")                 # same yellow as the big box: type here
+        x.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        x.border = Border(left=MED, right=MED, top=MED, bottom=MED)
+    ws.row_dimensions[frow].height = 22
+    note = ws[f"A{frow}"]
+    note.comment = Comment(
+        "One live filter box above every column.\n\n"
+        "Type text in a box and only the lots holding that text in THAT column stay lit; "
+        "everything else greys into REMAINING.\n\n"
+        "A comma or a slash means any of up to 4 values.\n"
+        "Fill in several boxes and a lot has to pass all of them.\n"
+        "These work on top of the big search box in B3 - they do not replace it.",
+        "Live Search")
+    note.comment.width = 340
+    note.comment.height = 150
+
+    # ---- each column box split into the values it matches ------------------- #
+    # Rows CT_R0-1..CT_R0+2*N_CT-1 of one hidden column per data column: the
+    # box with '/' turned into ',', then N_CT values and the text left over.
+    ws[f"{h_norm}9"] = "how many column boxes are filled in"
+    ws[f"{h_norm}10"] = (f'=SUMPRODUCT((${get_column_letter(2)}${frow}:'
+                         f'${status_col}${frow}<>"")*1)')
+    for i in range(N_BOX):
+        T = get_column_letter(h_ct0 + i)
+        box = f"${get_column_letter(2 + i)}${frow}"
+        ws[f"{T}{CT_R0 - 1}"] = f'=SUBSTITUTE(TRIM({box}),"/",",")'
+        for k in range(N_CT):
+            tr, lr = CT_R0 + k, CT_R0 + N_CT + k
+            if k == 0:
+                ws[f"{T}{lr}"] = f"=${T}${CT_R0 - 1}"
+            if k == N_CT - 1:
+                ws[f"{T}{tr}"] = f'=TRIM(${T}${lr})'
+            else:
+                ws[f"{T}{tr}"] = (f'=IF(${T}${lr}="","",IFERROR(TRIM(LEFT(${T}${lr},'
+                                  f'FIND(",",${T}${lr})-1)),TRIM(${T}${lr})))')
+                ws[f"{T}{lr + 1}"] = (f'=IFERROR(MID(${T}${lr},'
+                                      f'FIND(",",${T}${lr})+1,99999),"")')
+
     # ---- header row -------------------------------------------------------- #
-    hdr = 4
     heads = ["#"] + [label_of[scol] for scol in SEARCH_COLS] + ["Payment Status"]
     BODY = n + MAX_TERMS + 4   # lots + a total per group + matched + grand total
     for i, htext in enumerate(heads):
@@ -2580,6 +2644,19 @@ def build_live_search(wb, buyers) -> None:
     en_col = f"${h_en}$4:${h_en}${3 + NGRP}"
     trm_col = f"${term_col(0)}${T_TRM}:${term_col(MAX_TERMS - 1)}${T_TRM}"
 
+    boxspecs = [(i, f"${get_column_letter(2 + i)}${frow}") for i in range(N_BOX)]
+    col_batches = [boxspecs[i::4] for i in range(4)]
+
+    def boxval(i, srow):
+        """What a column box is matched against, for this lot.
+
+        Every data column is matched as text; Payment Status has no source
+        column, so it is matched against the word the status column shows.
+        """
+        if i < len(SEARCH_COLS):
+            return f'{cell(SEARCH_COLS[i], srow)}&""'
+        ad = cell("AD", srow)
+        return f'IF({ad}="","",IF({ad}<=0,"SETTLED","OUTSTANDING"))'
     for k, srow in enumerate(rows):
         rr = first_body + k
         ws[f"{h_src}{rr}"] = srow
@@ -2590,17 +2667,36 @@ def build_live_search(wb, buyers) -> None:
             f'IF($F$3="Bid Sheet",{cell("D", srow)},'
             f'IF($F$3="Unit",{cell("E", srow)},'
             f'{cell("F", srow)}&" "&{cell("G", srow)}&" "&{cell("B", srow)})))))')
+        # Does this lot pass every filled-in column box? An empty term must not
+        # match, so each one is guarded - the same trap the big box guards.
+        for j, batch in enumerate(col_batches):
+            parts = []
+            for i, boxref in batch:
+                T = get_column_letter(h_ct0 + i)
+                v = boxval(i, srow)
+                hits = "+".join(
+                    f'IF(${T}${CT_R0 + k}="",0,'
+                    f'IFERROR(ISNUMBER(SEARCH(${T}${CT_R0 + k},{v}))*1,0))'
+                    for k in range(N_CT))
+                parts.append(f'IF({boxref}="",1,IF({hits}>0,1,0))')
+            ws[f"{get_column_letter(h_cf0 + j)}{rr}"] = "=" + "*".join(parts)
+        colv = "*".join(f"${get_column_letter(h_cf0 + j)}{rr}" for j in range(len(col_batches)))
         facets = ",".join(
             f'IF(COUNTIF({grp_rng},{g})=0,TRUE,SUMPRODUCT(({grp_rng}={g})*({trm_rng}<>"")'
             f'*ISNUMBER(SEARCH({trm_rng},${h_hay}{rr})))>0)'
             for g in range(1, MAX_TERMS + 1))
-        ws[f"{h_hit}{rr}"] = f'=IF($B$3="",1,IF(AND({facets}),1,0))'
+        ws[f"{h_hit}{rr}"] = (f'=IF(AND($B$3="",{COLN}=0),1,IF({colv}=0,0,'
+                              f'IF($B$3="",1,IF(AND({facets}),1,0))))')
         pick = "0"
         for j in range(MAX_TERMS, 0, -1):
             pick = (f'IF(AND(${term_col(j - 1)}${T_TRM}<>"",'
                     f'ISNUMBER(SEARCH(${term_col(j - 1)}${T_TRM},${h_hay}{rr}))),'
                     f'{j},{pick})')
-        ws[f"{h_grp}{rr}"] = (f'=IF($B$3="",{G_ALL},IF(${h_hit}{rr}=0,{G_REM},{pick}))')
+        # Nothing typed anywhere -> the whole list. A miss -> REMAINING. Only
+        # column boxes filled in (B3 empty) -> the hits still form one block.
+        ws[f"{h_grp}{rr}"] = (f'=IF(AND($B$3="",{COLN}=0),{G_ALL},'
+                              f'IF(${h_hit}{rr}=0,{G_REM},'
+                              f'IF($B$3="",{G_ALL},{pick})))')
         ws[f"{h_rnk}{rr}"] = (f'=SUMPRODUCT(({lots_grp}=${h_grp}{rr})*({lots_src}<${h_src}{rr}))'
                               f'+1')
         ws[f"{h_out}{rr}"] = (f'=IF(INDEX({en_col},${h_grp}{rr})=0,0,'
@@ -2663,7 +2759,8 @@ def build_live_search(wb, buyers) -> None:
         label = (f'IF(${h_big}{rr}=1,"GRAND TOTAL  \u2014  matching + remaining",'
                  f'IF(${h_mtf}{rr}=1,"TOTAL MATCHED  \u2014  every group together",'
                  f'IF(${h_rol}{rr}={G_REM},"REMAINING  \u2014  did not match the search",'
-                 f'IF(${h_rol}{rr}={G_ALL},"ALL LOTS  \u2014  nothing typed in the box",'
+                 f'IF(${h_rol}{rr}={G_ALL},IF({COLN}=0,"ALL LOTS  \u2014  nothing typed in the box",'
+                 f'"ALL LOTS  \u2014  passed the column boxes"),'
                  f'"GROUP "&${h_rol}{rr}&" TOTAL  \u2014  lots matching  "'
                  f'&INDEX({trm_col},${h_rol}{rr})))))')
         a = ws.cell(row=rr, column=1)
@@ -2766,7 +2863,7 @@ def build_live_search(wb, buyers) -> None:
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.print_title_rows = f"{hdr}:{hdr}"
+    ws.print_title_rows = f"{frow}:{hdr}"
 
 
 def main(path: str) -> None:
