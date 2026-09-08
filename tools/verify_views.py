@@ -754,11 +754,14 @@ def main(path):
                 memb[g].append(i)
         cnt = {g: len(v) for g, v in memb.items()}
         st, en = {}, {}
-        for g in range(1, G_REM10 + 1):
+        for g in range(1, G_ALL10 + 1):        # the blocks the search hit, end to end
             st[g] = first10 if g == 1 else (st[g - 1] if cnt[g - 1] == 0 else en[g - 1] + 1)
             en[g] = 0 if cnt[g] == 0 else st[g] + cnt[g]
-        mt = st[G_REM10] if cnt[G_REM10] == 0 else en[G_REM10] + 1
-        return memb, cnt, st, en, mt, mt + 1, terms   # TOTAL MATCHED, then GRAND TOTAL
+        mt = st[G_ALL10] if cnt[G_ALL10] == 0 else en[G_ALL10] + 1
+        st[G_REM10] = mt + 1                   # REMAINING starts under the matched total
+        en[G_REM10] = 0 if cnt[G_REM10] == 0 else st[G_REM10] + cnt[G_REM10]
+        grand = st[G_REM10] if cnt[G_REM10] == 0 else en[G_REM10] + 1
+        return memb, cnt, st, en, mt, grand, terms
 
     def hay10(srow, sin):
         if sin == "Lot No.":

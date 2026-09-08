@@ -2434,8 +2434,8 @@ def build_live_search(wb, buyers) -> None:
     ws.merge_cells(f"A1:{last_col}1")
     c = ws["A1"]
     c.value = ("MSTC LIMITED  \u2022  LIVE SEARCH   (results grouped by the value you typed, each "
-               "group totalled, the misses greyed in a REMAINING block, a TOTAL MATCHED of the "
-               "hits and a GRAND TOTAL of both at the foot)")
+               "group totalled, TOTAL MATCHED beneath them, the misses greyed in a REMAINING "
+               "block, a GRAND TOTAL of both at the foot)")
     c.font = Font(bold=True, size=15, color="FFFFFF")
     c.fill = fill("1F3864")
     c.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -2451,11 +2451,12 @@ def build_live_search(wb, buyers) -> None:
                "EVERY facet.   \u2022   the two mix:   OMKAR, STERLING + COPPER   = (OMKAR or STERLING) and "
                "COPPER.   Up to 8 values, empty ones ignored, spaces around a separator are fine.  "
                "\u2022   THE RESULT IS GROUPED BY THE VALUE YOU TYPED: every value gets its own block "
-               "of lots with a shaded \u2211 total row beneath it, then a greyed REMAINING block holds the "
-               "lots that did not match, with its own total, then a blue TOTAL MATCHED row adds every group "
-               "up at once - the grand total of the rows your search actually hit - and the green GRAND "
-               "TOTAL of both sits at the foot.  A lot matching two values is counted under the first one "
-               "only, so TOTAL MATCHED + REMAINING always equals GRAND TOTAL, and with nothing typed the "
+               "of lots with a shaded \u2211 total row beneath it, then a blue TOTAL MATCHED row adds "
+               "every group up at once - the grand total of the rows your search actually hit, sitting "
+               "right beneath them.  Under that a greyed REMAINING block holds the lots that did not "
+               "match, with its own total, and the green GRAND TOTAL of both sits at the foot.  A lot "
+               "matching two values is counted under the first one only, so TOTAL MATCHED + REMAINING "
+               "always equals GRAND TOTAL, and with nothing typed the "
                "matched row is the whole list.   \u2022   clear the box and all 37 come back "
                "in one ALL LOTS block.   \u2022   cell F3 narrows what the text is looked for in "
                "(lot no. + buyer + name by default).   \u2022   matching is 'contains', not case "
@@ -2606,14 +2607,22 @@ def build_live_search(wb, buyers) -> None:
                               f'INDEX({st_col},${h_grp}{rr})+${h_rnk}{rr}-1)')
 
     # ---- the block each group occupies -------------------------------------- #
-    for g in range(1, NGRP + 1):
+    # Groups 1..G_ALL are the blocks the search hit, laid end to end. The
+    # TOTAL MATCHED row goes straight beneath them, and REMAINING starts one
+    # row lower - so the matched total sits with the rows it totals.
+    for g in range(1, G_ALL + 1):
         r = 3 + g
         ws[f"{h_cnt}{r}"] = f"=COUNTIF({lots_grp},{g})"
         ws[f"{h_st}{r}"] = (first_body if g == 1 else
                             f'=IF(${h_cnt}{r - 1}=0,${h_st}{r - 1},${h_en}{r - 1}+1)')
         ws[f"{h_en}{r}"] = f'=IF(${h_cnt}{r}=0,0,${h_st}{r}+${h_cnt}{r})'
-    ws[f"{h_gd}4"] = f'=IF(${h_cnt}{3 + NGRP}=0,${h_st}{3 + NGRP},${h_en}{3 + NGRP}+1)'
-    ws[f"{h_gd}5"] = f"={MT_ROW}+1"
+    ws[f"{h_gd}4"] = f'=IF(${h_cnt}{3 + G_ALL}=0,${h_st}{3 + G_ALL},${h_en}{3 + G_ALL}+1)'
+    r = 3 + G_REM
+    ws[f"{h_cnt}{r}"] = f"=COUNTIF({lots_grp},{G_REM})"
+    ws[f"{h_st}{r}"] = f"={MT_ROW}+1"
+    ws[f"{h_en}{r}"] = f'=IF(${h_cnt}{r}=0,0,${h_st}{r}+${h_cnt}{r})'
+    ws[f"{h_gd}5"] = (f'=IF(${h_cnt}{3 + G_REM}=0,${h_st}{3 + G_REM},'
+                      f'${h_en}{3 + G_REM}+1)')
     # How many lots the search hit: everything except the REMAINING block. With
     # nothing typed there is no REMAINING block, so the matched total is all of
     # them - which keeps TOTAL MATCHED + REMAINING = GRAND TOTAL true always.

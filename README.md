@@ -33,8 +33,8 @@ nothing is typed in, so they all update the moment the source sheet changes.
 | | 🔍 SEARCH ▸ | **OMKAR, STERLING** | | | SEARCH IN ▸ | **Lot No. + Buyer + Name** ▾ | MATCHES ▸ | **9 of 37** | matching 9 of 37 lots • search: OMKAR, STERLING • in: Lot No. + Buyer + Name • grouped by the value typed, the misses greyed in REMAINING, TOTAL MATCHED totals the hits |
 
 What the table looks like with `OMKAR, STERLING` typed in — one block per typed value, each
-with its own total, then the greyed misses, then the total of what you found and the grand total
-of everything (figures are real):
+with its own total, then the total of what you found, then the greyed misses, then the grand
+total of everything (figures are real):
 
 | # | Lot No. | Buyer / count | Lot Name | … | Mat. Value | Outstanding |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -45,23 +45,23 @@ of everything (figures are real):
 | … | | | *five more STERLING lots* | | | |
 | 7 | 2069 | STERLING ENTERPRISES | Scrap of 33 KV CB | | 54,000 | 50,031 |
 | ∑ | | **7 lot(s)** | **GROUP 2 TOTAL — lots matching STERLING** | | **511,966** | **300,144** |
+| ∑ | | **9 lot(s)** | **TOTAL MATCHED — every group together** | | **3,323,897** | **300,144** |
 | 1 | *1763* | *AL HAMD TRADE CORPORATION* | *SCRAP COPPER OF T/F WINDING …* | | *790,089* | *0* |
 | … | | | *27 more greyed lots that did not match* | | | |
 | ∑ | | **28 lot(s)** | **REMAINING — did not match the search** | | **11,806,701** | **494,492** |
-| ∑ | | **9 lot(s)** | **TOTAL MATCHED — every group together** | | **3,323,897** | **300,144** |
 | ∑ | | **37 lot(s)** | **GRAND TOTAL — matching + remaining** | | **15,130,598** | **794,636** |
 
 * **The result is grouped by the value you typed.** Each value gets its own block of lots with
   a shaded `∑` total row beneath it — every money column is a `SUMIFS` over that value's lots,
   and the row also says how many lots are in the group and whether they are all settled.
+* **Directly beneath the matched rows, a blue TOTAL MATCHED row — the grand total of what your
+  search hit.** It adds every group up at once, so one search gives you one number:
+  `OMKAR, STERLING` → **9 lots, Mat. Value 3,323,897 · Total Received 3,554,183 ·
+  Outstanding 300,144**. It is the whole list less the REMAINING block, over every money column,
+  and it carries its own `ALL SETTLED` / `OUTSTANDING` chip.
 * **Then a greyed REMAINING block** holds every lot that did *not* match, still fully readable,
   with its own total row — so nothing is hidden, and you can see the size of what you filtered
   out.
-* **Then a blue TOTAL MATCHED row — the grand total of the rows your search hit.** It adds every
-  group up at once, so one search gives you one number: `OMKAR, STERLING` → **9 lots,
-  Mat. Value 3,323,897 · Total Received 3,554,183 · Outstanding 300,144**. It is the whole list
-  less the REMAINING block, over every money column, and it carries its own `ALL SETTLED` /
-  `OUTSTANDING` chip.
 * **Then the GRAND TOTAL** of both, which always equals the source's own totals
   (Mat. Value 15,130,598 · Total Received 16,923,487 · Outstanding 794,636). A lot that matches
   two values is counted under the **first** one only, so the group totals add up exactly:
