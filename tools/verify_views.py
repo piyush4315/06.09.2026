@@ -689,9 +689,10 @@ def main(path):
     L_GD, L_ROL, L_BIG = (get_column_letter(hh10 + 22), get_column_letter(hh10 + 23),
                           get_column_letter(hh10 + 24))
     L_ROW, L_REM = get_column_letter(hh10 + 25), get_column_letter(hh10 + 26)
+    L_MTF = get_column_letter(hh10 + 27)     # 1 on the TOTAL MATCHED row
     G_ALL10, G_REM10 = MAX_TERMS + 1, MAX_TERMS + 2
     first10, last_lot10 = 5, 4 + n10
-    last10 = 4 + n10 + MAX_TERMS + 3
+    last10 = 4 + n10 + MAX_TERMS + 4
     checks += 6
 
     if [ws.cell(row=4, column=i).value for i in range(1, len(heads10) + 1)] != heads10:
@@ -756,8 +757,8 @@ def main(path):
         for g in range(1, G_REM10 + 1):
             st[g] = first10 if g == 1 else (st[g - 1] if cnt[g - 1] == 0 else en[g - 1] + 1)
             en[g] = 0 if cnt[g] == 0 else st[g] + cnt[g]
-        grand = st[G_REM10] if cnt[G_REM10] == 0 else en[G_REM10] + 1
-        return memb, cnt, st, en, grand, terms
+        mt = st[G_REM10] if cnt[G_REM10] == 0 else en[G_REM10] + 1
+        return memb, cnt, st, en, mt, mt + 1, terms   # TOTAL MATCHED, then GRAND TOTAL
 
     def hay10(srow, sin):
         if sin == "Lot No.":
@@ -777,7 +778,8 @@ def main(path):
     def check_live10(vals, tag, text, sin):
         S = LIVE_SEARCH.upper()
         hays = [hay10(r, sin) for r in srows10]
-        memb, cnt, st, en, grand, terms = layout10(text, hays)
+        memb, cnt, st, en, mt, grand, terms = layout10(text, hays)
+        grp_of = {i: g for g, w in memb.items() for i in w}
         role_of = {en[g]: g for g in range(1, G_REM10 + 1) if cnt[g]}
         row_of = {}
         for g, who in memb.items():
@@ -785,7 +787,8 @@ def main(path):
                 row_of[st[g] + k] = (i, k + 1, g)
         hits = sum(len(v) for g, v in memb.items() if g != G_REM10)
         eq(f"{LIVE_SEARCH}!H3 [matches] {tag}", vals.get((S, "H3")), f"{hits} of {n10}")
-        eq(f"{LIVE_SEARCH}!{L_GD}4 [grand-total row] {tag}", vals.get((S, f"{L_GD}4")), grand)
+        eq(f"{LIVE_SEARCH}!{L_GD}4 [matched-total row] {tag}", vals.get((S, f"{L_GD}4")), mt)
+        eq(f"{LIVE_SEARCH}!{L_GD}5 [grand-total row] {tag}", vals.get((S, f"{L_GD}5")), grand)
         for g in range(1, G_REM10 + 1):
             eq(f"{LIVE_SEARCH}!{L_CNT}{3 + g} [group {g} count] {tag}",
                vals.get((S, f"{L_CNT}{3 + g}")), cnt[g])
@@ -794,11 +797,14 @@ def main(path):
         for rr in range(first10, last10 + 1):
             want_role = role_of.get(rr, 0)
             want_big = 1 if rr == grand else 0
+            want_mtf = 1 if rr == mt else 0
             here = row_of.get(rr)
             eq(f"{LIVE_SEARCH}!{L_ROL}{rr} [row role] {tag}", vals.get((S, f"{L_ROL}{rr}")),
                want_role)
             eq(f"{LIVE_SEARCH}!{L_BIG}{rr} [grand row] {tag}", vals.get((S, f"{L_BIG}{rr}")),
                want_big)
+            eq(f"{LIVE_SEARCH}!{L_MTF}{rr} [matched row] {tag}", vals.get((S, f"{L_MTF}{rr}")),
+               want_mtf)
             eq(f"{LIVE_SEARCH}!{L_ROW}{rr} [source row shown] {tag}",
                vals.get((S, f"{L_ROW}{rr}")), srows10[here[0]] if here else 0)
             eq(f"{LIVE_SEARCH}!{L_REM}{rr} [greyed] {tag}", vals.get((S, f"{L_REM}{rr}")),
@@ -818,13 +824,20 @@ def main(path):
             else:
                 # a group / remaining / grand total row, or a row the table does
                 # not reach - which the sheet leaves completely empty
-                used = bool(want_role or want_big)
-                who = [i for i in range(n10)] if want_big else memb.get(want_role, [])
-                many = n10 if want_big else cnt.get(want_role, 0)
+                used = bool(want_role or want_big or want_mtf)
+                if want_big:
+                    who = list(range(n10))
+                elif want_mtf:
+                    who = [i for i in range(n10) if grp_of[i] != G_REM10]
+                else:
+                    who = memb.get(want_role, [])
+                many = len(who) if (want_big or want_mtf) else cnt.get(want_role, 0)
                 if not used:
                     label10 = ""
                 elif want_big:
                     label10 = "GRAND TOTAL  \u2014  matching + remaining"
+                elif want_mtf:
+                    label10 = "TOTAL MATCHED  \u2014  every group together"
                 elif want_role == G_REM10:
                     label10 = "REMAINING  \u2014  did not match the search"
                 elif want_role == G_ALL10:
